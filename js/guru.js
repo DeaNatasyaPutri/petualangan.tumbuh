@@ -54,8 +54,9 @@ const GuruView = {
   _tabOverview() {
     const user = Auth.getCurrentUser();
     const kelas = DB.getKelas();
-    const myKelas = Auth.isAdmin() ? kelas : kelas.filter(k => k.guruId === user.id);
-    const myMurid = DB.getUsers().filter(u => u.role === 'murid' && myKelas.some(k => k.muridIds?.includes(u.id)));
+    const ownKelas = kelas.filter(k => k.guruId === user.id);
+    const myKelas = (Auth.isAdmin() || ownKelas.length === 0) ? kelas : ownKelas;
+    const myMurid = DB.getUsers().filter(u => u.role === 'murid' && (myKelas.some(k => k.muridIds?.includes(u.id)) || ownKelas.length === 0));
     const topics = DB.getTopics();
     const cases = DB.getCases();
     const totalSoal = DB.getKuisKejutan().length + DB.getTantanganAkhir().length;
@@ -441,7 +442,8 @@ const GuruView = {
   _tabKelas() {
     const user = Auth.getCurrentUser();
     const allKelas = DB.getKelas();
-    const myKelas = Auth.isAdmin() ? allKelas : allKelas.filter(k => k.guruId === user.id);
+    const ownKelas = allKelas.filter(k => k.guruId === user.id);
+    const myKelas = (Auth.isAdmin() || ownKelas.length === 0) ? allKelas : ownKelas;
     const allUsers = DB.getUsers();
 
     return `
@@ -1217,12 +1219,13 @@ const GuruView = {
   _tabHasil() {
     const user = Auth.getCurrentUser();
     const kelas = DB.getKelas();
-    const myKelas = Auth.isAdmin() ? kelas : kelas.filter(k => k.guruId === user.id);
+    const ownKelas = kelas.filter(k => k.guruId === user.id);
+    const myKelas = (Auth.isAdmin() || ownKelas.length === 0) ? kelas : ownKelas;
     const allUsers = DB.getUsers();
     const scores = DB.getScores();
 
     const myMurid = allUsers.filter(u =>
-      u.role === 'murid' && myKelas.some(k => k.muridIds?.includes(u.id))
+      u.role === 'murid' && (myKelas.some(k => k.muridIds?.includes(u.id)) || ownKelas.length === 0)
     );
     const allMurid = Auth.isAdmin() ? allUsers.filter(u => u.role === 'murid') : myMurid;
 

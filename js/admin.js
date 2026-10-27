@@ -107,11 +107,11 @@ const AdminView = {
     const murid = users.filter(u => u.role === 'murid');
     const guru  = users.filter(u => u.role === 'guru');
 
-    const renderTable = (list, title, icon) => `
+    const renderTable = (list, title, icon, roleKey) => `
       <div class="users-section">
         <div class="users-section-header">
           <h3>${icon} ${title} (${list.length})</h3>
-          <button class="btn-primary sm" onclick="AdminView.showAddUser('${list[0]?.role || 'murid'}')">
+          <button class="btn-primary sm" onclick="AdminView.showAddUser('${roleKey}')">
             ➕ Tambah ${title}
           </button>
         </div>
@@ -119,7 +119,7 @@ const AdminView = {
           <table class="data-table">
             <thead><tr><th>Avatar</th><th>Nama</th><th>Username</th><th>Kelas</th><th>Aksi</th></tr></thead>
             <tbody>
-              ${list.map(u => `
+              ${list.length > 0 ? list.map(u => `
                 <tr>
                   <td><span class="avatar-cell">${u.avatar || '👤'}</span></td>
                   <td><strong>${u.name}</strong></td>
@@ -127,9 +127,15 @@ const AdminView = {
                   <td>${u.kelas || '-'}</td>
                   <td>
                     <button class="btn-icon edit" title="Edit" onclick="AdminView.showEditUser('${u.id}')">✏️</button>
-                    ${u.id !== 'u1' ? `<button class="btn-icon del" title="Hapus" onclick="AdminView.deleteUser('${u.id}','${u.name}')">🗑️</button>` : ''}
+                    ${u.id !== 'u1' ? `<button class="btn-icon del" title="Hapus" onclick="AdminView.deleteUser('${u.id}','${u.name.replace(/'/g, "\\'")}')">🗑️</button>` : ''}
                   </td>
-                </tr>`).join('')}
+                </tr>`).join('') : `
+                <tr>
+                  <td colspan="5" style="text-align:center;color:var(--text-muted);padding:20px">
+                    Belum ada data ${title.toLowerCase()}. Klik tombol <strong>"➕ Tambah ${title}"</strong> di atas untuk menambahkan.
+                  </td>
+                </tr>
+              `}
             </tbody>
           </table>
         </div>
@@ -139,8 +145,8 @@ const AdminView = {
       <div class="main-header">
         <h1 class="main-title">👥 Kelola Pengguna</h1>
       </div>
-      ${renderTable(guru, 'Guru', '👩‍🏫')}
-      ${renderTable(murid, 'Murid', '🌱')}`;
+      ${renderTable(guru, 'Guru', '👩‍🏫', 'guru')}
+      ${renderTable(murid, 'Murid', '🌱', 'murid')}`;
   },
 
   // ── Content Tab ───────────────────────────────────────────
@@ -320,55 +326,87 @@ const AdminView = {
     Auth.logout();
   },
 
-  showAddUser(role) {
+  showAddUser(role = 'murid') {
+    const isGuru = role === 'guru';
+    const defaultAvatar = isGuru ? '👩‍🏫' : '🌱';
+
     App.showModal(`
       <div class="modal-form">
-        <h3>➕ Tambah ${role === 'guru' ? 'Guru' : 'Murid'} Baru</h3>
+        <h3>➕ Tambah ${isGuru ? 'Guru' : 'Murid'} Baru</h3>
+        <input type="hidden" id="nu-role" value="${isGuru ? 'guru' : 'murid'}">
         <div class="form-group">
-          <label class="form-label">Nama Lengkap</label>
-          <input class="form-input" id="nu-name" placeholder="Nama lengkap...">
+          <label class="form-label">Peran Akun (Role)</label>
+          <input class="form-input" value="${isGuru ? '👩‍🏫 Guru (Pengajar)' : '🌱 Murid (Peserta Didik)'}" disabled style="background:#F1F5F9;font-weight:800">
         </div>
         <div class="form-group">
-          <label class="form-label">Username</label>
-          <input class="form-input" id="nu-username" placeholder="Username unik...">
+          <label class="form-label">Nama Lengkap ${isGuru ? 'Guru' : 'Murid'}</label>
+          <input class="form-input" id="nu-name" placeholder="${isGuru ? 'Contoh: Pak Budi Santoso, S.Pd.' : 'Contoh: Andi Pratama'}">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Username Login</label>
+          <input class="form-input" id="nu-username" placeholder="${isGuru ? 'Contoh: guru2' : 'Contoh: murid7'}">
         </div>
         <div class="form-group">
           <label class="form-label">Password</label>
-          <input class="form-input" id="nu-password" type="password" placeholder="Password...">
+          <input class="form-input" id="nu-password" type="password" placeholder="Masukkan password login...">
         </div>
         <div class="form-group">
-          <label class="form-label">Kelas</label>
-          <input class="form-input" id="nu-kelas" placeholder="Contoh: 5A">
+          <label class="form-label">${isGuru ? 'Kelas yang Diampu' : 'Kelas'}</label>
+          <input class="form-input" id="nu-kelas" placeholder="Contoh: 5A" value="5A">
         </div>
         <div class="form-group">
           <label class="form-label">Avatar Emoji</label>
-          <input class="form-input" id="nu-avatar" placeholder="🌱" value="🌱">
+          <input class="form-input" id="nu-avatar" placeholder="${defaultAvatar}" value="${defaultAvatar}">
         </div>
         <div class="modal-actions">
           <button class="btn-secondary" onclick="App.closeModal()">Batal</button>
-          <button class="btn-primary" onclick="AdminView.doAddUser('${role}')">➕ Tambah</button>
+          <button class="btn-primary" onclick="AdminView.doAddUser('${isGuru ? 'guru' : 'murid'}')">➕ Tambah ${isGuru ? 'Guru' : 'Murid'}</button>
         </div>
       </div>`);
   },
 
-  doAddUser(role) {
+  doAddUser(roleParam) {
+    const roleEl   = document.getElementById('nu-role');
+    const role     = (roleParam === 'guru' || roleEl?.value === 'guru') ? 'guru' : 'murid';
     const name     = document.getElementById('nu-name').value.trim();
     const username = document.getElementById('nu-username').value.trim();
     const password = document.getElementById('nu-password').value;
-    const kelas    = document.getElementById('nu-kelas').value.trim();
-    const avatar   = document.getElementById('nu-avatar').value.trim() || '👤';
+    const kelas    = document.getElementById('nu-kelas').value.trim() || '5A';
+    const avatar   = document.getElementById('nu-avatar').value.trim() || (role === 'guru' ? '👩‍🏫' : '🌱');
 
     if (!name || !username || !password) {
-      App.showToast('Mohon isi semua field!', 'error'); return;
+      App.showToast('Mohon isi Nama Lengkap, Username, dan Password!', 'error');
+      return;
     }
     const users = DB.getUsers();
     if (users.find(u => u.username === username)) {
-      App.showToast('Username sudah digunakan!', 'error'); return;
+      App.showToast('Username sudah digunakan!', 'error');
+      return;
     }
 
-    DB.addUser({ username, password, role, name, avatar, kelas, poin: 0, badges: [] });
+    const newUser = DB.addUser({
+      username,
+      password,
+      role,
+      name,
+      avatar,
+      kelas,
+      poin: 0,
+      badges: role === 'murid' ? ['first_login'] : []
+    });
+
+    // If adding a Murid, also register into matching kelas list
+    if (role === 'murid' && kelas) {
+      const allKelas = DB.getKelas();
+      const targetKelas = allKelas.find(k => k.name.toLowerCase().includes(kelas.toLowerCase()));
+      if (targetKelas && !targetKelas.muridIds.includes(newUser.id)) {
+        targetKelas.muridIds.push(newUser.id);
+        DB.saveKelas(allKelas);
+      }
+    }
+
     App.closeModal();
-    App.showToast(`${role === 'guru' ? 'Guru' : 'Murid'} berhasil ditambahkan!`, 'success');
+    App.showToast(`${role === 'guru' ? 'Guru' : 'Murid'} "${name}" berhasil ditambahkan ke daftar ${role === 'guru' ? 'Guru' : 'Murid'}!`, 'success');
     this.render('users');
   },
 
@@ -399,6 +437,13 @@ const AdminView = {
       <div class="modal-form">
         <h3>✏️ Edit Pengguna: ${u.name}</h3>
         <div class="form-group">
+          <label class="form-label">Peran Akun (Role)</label>
+          <select class="form-input" id="eu-role">
+            <option value="guru" ${u.role === 'guru' ? 'selected' : ''}>👩‍🏫 Guru (Pengajar)</option>
+            <option value="murid" ${u.role === 'murid' ? 'selected' : ''}>🌱 Murid (Peserta Didik)</option>
+          </select>
+        </div>
+        <div class="form-group">
           <label class="form-label">Nama Lengkap</label>
           <input class="form-input" id="eu-name" value="${u.name}">
         </div>
@@ -423,6 +468,7 @@ const AdminView = {
 
   doEditUser(id) {
     const data = {
+      role:   document.getElementById('eu-role')?.value || 'murid',
       name:   document.getElementById('eu-name').value.trim(),
       kelas:  document.getElementById('eu-kelas').value.trim(),
       avatar: document.getElementById('eu-avatar').value.trim(),
