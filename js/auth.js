@@ -1,5 +1,7 @@
 // ============================================================
-// AUTH.JS — Authentication & Session Management
+// AUTH.JS — Authentication & Per-Tab Session Management
+//           (Supports multiple simultaneous user sessions across
+//            browser tabs/windows for Real-Time Collaboration)
 // ============================================================
 
 const Auth = {
@@ -10,7 +12,14 @@ const Auth = {
     const users = DB.getUsers();
     const user = users.find(u => u.username === username && u.password === password);
     if (user) {
-      const session = { userId: user.id, role: user.role, loginAt: new Date().toISOString() };
+      const group = user.role === 'murid' ? DB.getGroupByUserId(user.id) : null;
+      const session = {
+        userId: user.id,
+        role: user.role,
+        groupId: group ? group.id : (user.groupId || null),
+        loginAt: new Date().toISOString()
+      };
+      sessionStorage.setItem(this._sessionKey, JSON.stringify(session));
       localStorage.setItem(this._sessionKey, JSON.stringify(session));
     }
     return user || null;
@@ -18,14 +27,15 @@ const Auth = {
 
   // Logout
   logout() {
+    sessionStorage.removeItem(this._sessionKey);
     localStorage.removeItem(this._sessionKey);
     App.navigate('login');
   },
 
-  // Get current session
+  // Get current session (prioritizes sessionStorage so multiple tabs can log in as different users)
   getSession() {
     try {
-      const raw = localStorage.getItem(this._sessionKey);
+      const raw = sessionStorage.getItem(this._sessionKey) || localStorage.getItem(this._sessionKey);
       return raw ? JSON.parse(raw) : null;
     } catch { return null; }
   },
@@ -34,12 +44,24 @@ const Auth = {
   getCurrentUser() {
     const session = this.getSession();
     if (!session) return null;
-    return DB.getUserById(session.userId);
+    const u = DB.getUserById(session.userId);
+    if (u && u.role === 'murid') {
+      const g = DB.getGroupByUserId(u.id);
+      u.groupId = g ? g.id : (u.groupId || null);
+    }
+    return u;
+  },
+
+  // Get current user's group object (for Murid)
+  getCurrentGroup() {
+    const u = this.getCurrentUser();
+    if (!u || u.role !== 'murid') return null;
+    return DB.getGroupByUserId(u.id);
   },
 
   // Check if logged in
   isLoggedIn() {
-    return !!this.getSession();
+    return !!this.getCurrentUser();
   },
 
   // Guard: redirect to login if not authenticated

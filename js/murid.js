@@ -3,9 +3,18 @@
 // ============================================================
 
 const MuridView = {
+  _unsubRT: null,
 
   render() {
+    if (this._unsubRT) { this._unsubRT(); this._unsubRT = null; }
+    this._unsubRT = RealtimeSync.subscribe((evt) => {
+      if (App.currentView === 'murid' && ['GROUPS_UPDATED', 'POS2_LKK_SUBMITTED', 'POS3_ANSWER_SUBMITTED'].includes(evt.type)) {
+        this.render();
+      }
+    });
+
     const user = Auth.getCurrentUser();
+    const myGroup = Auth.getCurrentGroup();
     const scores = DB.getScoreByUser(user.id);
     const settings = DB.getSettings();
 
@@ -37,6 +46,11 @@ const MuridView = {
             <div class="profile-info">
               <div class="profile-name">${user.name}</div>
               <div class="profile-kelas">Kelas ${user.kelas || '5'}</div>
+              <div style="margin:6px 0">
+                <span class="profile-group-badge">
+                  ${myGroup ? `${myGroup.emoji || '👥'} ${myGroup.name}` : '⚠️ Belum Masuk Kelompok'}
+                </span>
+              </div>
               <div class="profile-poin">⭐ ${user.poin || 0} Poin</div>
             </div>
           </div>

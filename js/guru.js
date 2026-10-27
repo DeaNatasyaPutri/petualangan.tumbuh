@@ -6,8 +6,21 @@
 const GuruView = {
   _activeKuisSubtab: 'individu', // 'kelompok' | 'individu'
   _newQType: 'pg',               // 'pg' | 'esai'
+  _currentTab: 'overview',
+  _syncBound: false,
 
   render(tab = 'overview') {
+    if (!this._syncBound && typeof RealtimeSync !== 'undefined') {
+      this._syncBound = true;
+      RealtimeSync.subscribe((msg) => {
+        const viewEl = document.getElementById('view-guru');
+        if (viewEl && viewEl.classList.contains('active') && this._currentTab === 'kelompok') {
+          if (['GROUPS_UPDATED', 'POS2_CASE_ASSIGNED', 'POS2_LKK_TYPING', 'POS2_LKK_SUBMITTED', 'POS3_OPTION_SELECTED', 'POS3_ANSWER_SUBMITTED'].includes(msg.event)) {
+            this._renderTab('kelompok');
+          }
+        }
+      });
+    }
     const el = document.getElementById('view-guru');
     el.innerHTML = `
       <div class="dashboard-layout">
@@ -20,9 +33,12 @@ const GuruView = {
   },
 
   _renderTab(tab) {
+    this._currentTab = tab;
     const main = document.getElementById('guru-main');
+    if (!main) return;
     switch (tab) {
       case 'overview': main.innerHTML = this._tabOverview(); break;
+      case 'kelompok': main.innerHTML = this._tabKelompok(); break;
       case 'kelas':    main.innerHTML = this._tabKelas(); break;
       case 'materi':   main.innerHTML = this._tabMateri(); break;
       case 'kasus':    main.innerHTML = this._tabKasus(); break;
@@ -76,23 +92,23 @@ const GuruView = {
       </div>
 
       <div class="guru-quick-actions">
-        <h3>⚡ Menu Cepat Pengelolaan Pembelajaran</h3>
+        <h3>⚡ Menu Cepat Pengelolaan Pembelajaran & Sinkronisasi Real-Time</h3>
         <div class="quick-actions-grid">
-          <button class="quick-action-btn blue" onclick="GuruView.render('materi')">
-            <span class="qa-icon">📤</span>
-            <span>Unggah Video & PDF (Pos 1)</span>
+          <button class="quick-action-btn green" onclick="GuruView.render('kelompok')">
+            <span class="qa-icon">👥</span>
+            <span>Manajemen Kelompok Belajar</span>
+          </button>
+          <button class="quick-action-btn blue" onclick="App.navigate('pos2')">
+            <span class="qa-icon">🎡</span>
+            <span>Kendali Roda Undian Kasus (Pos 2)</span>
           </button>
           <button class="quick-action-btn purple" onclick="GuruView.render('kasus')">
-            <span class="qa-icon">🎡</span>
+            <span class="qa-icon">🎴</span>
             <span>Edit Kasus & Gambar (Pos 2)</span>
           </button>
           <button class="quick-action-btn orange" onclick="GuruView.render('kuis')">
             <span class="qa-icon">🏆</span>
             <span>Susun Kuis PG & Esai (Pos 3)</span>
-          </button>
-          <button class="quick-action-btn green" onclick="GuruView.render('hasil')">
-            <span class="qa-icon">📊</span>
-            <span>Lihat Hasil & Esai Murid</span>
           </button>
         </div>
       </div>
@@ -113,6 +129,310 @@ const GuruView = {
             <button class="btn-secondary sm" onclick="App.navigate('pos1')">👁️ Lihat di Pos 1</button>
           </div>`).join('')}
       </div>`;
+  },
+
+  // ══════════════════════════════════════════════════════════
+  // 1B. MANAJEMEN KELOMPOK BELAJAR TAB (Manual Member Assignment + Live Status)
+  // ══════════════════════════════════════════════════════════
+  _tabKelompok() {
+    const groups = DB.getGroups();
+    const allMurid = DB.getUsers().filter(u => u.role === 'murid');
+    const pos2State = DB.getPos2State();
+    const pos3State = DB.getPos3GroupState();
+    const cases = DB.getCases();
+
+    // Find students not yet assigned to any group
+    const assignedIds = new Set(groups.flatMap(g => g.memberIds || []));
+    const unassignedMurid = allMurid.filter(m => !assignedIds.has(m.id));
+
+    return `
+      <div class="main-header">
+        <div>
+          <h1 class="main-title">👥 Manajemen Kelompok Belajar</h1>
+          <p class="main-subtitle">Buat kelompok belajar, pilih dan tentukan akun murid secara manual ke dalam masing-masing kelompok, serta pantau kolaborasi Pos 2 & Pos 3 secara real-time.</p>
+        </div>
+        <div style="display:flex;gap:10px">
+          <button class="btn-secondary" onclick="App.navigate('pos2')">🎡 Kendali Undian Roda Kasus (Pos 2)</button>
+          <button class="btn-primary" onclick="GuruView.openCreateGroupModal()">➕ Buat Kelompok Baru</button>
+        </div>
+      </div>
+
+      <!-- Unassigned Students Alert / Quick Info -->
+      <div class="group-sync-banner">
+        <div style="display:flex;align-items:center;gap:12px">
+          <span style="font-size:1.8rem">📡</span>
+          <div>
+            <strong>Sinkronisasi Kelompok Aktif (Real-Time)</strong>
+            <p style="font-size:0.86rem;color:var(--text-muted);margin-top:2px">
+              Setiap murid yang masuk ke dalam kelompok hanya akan melihat studi kasus Pos 2 dan lembar jawab Kuis Kelompok Pos 3 milik kelompoknya sendiri.
+              ${unassignedMurid.length > 0
+                ? `<span style="color:#E65100;font-weight:800"> Terdapat ${unassignedMurid.length} akun murid yang belum masuk kelompok (${unassignedMurid.map(m => m.name).join(', ')}).</span>`
+                : `<span style="color:#2E7D32;font-weight:800"> Semua akun murid (${allMurid.length} murid) sudah memiliki kelompok!</span>`}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Groups Grid -->
+      <div class="group-mgmt-grid">
+        ${groups.map((g, idx) => {
+          const members = allMurid.filter(m => (g.memberIds || []).includes(m.id));
+          const assign = pos2State.assignments?.[g.id];
+          const assignedCase = assign ? cases.find(c => c.id === assign.caseId) : null;
+          const lkk = pos2State.lkk?.[g.id];
+          const filledCount = lkk ? (lkk.answers || []).filter(a => a && a.trim().length > 0).length : 0;
+          const gPos3 = pos3State[g.id] || { totalScore: 0, answers: {} };
+          const answeredPos3Count = Object.keys(gPos3.answers || {}).length;
+
+          return `
+            <div class="group-mgmt-card" style="border-top: 6px solid ${g.color || '#1E88E5'}">
+              <div class="group-mgmt-header">
+                <div style="display:flex;align-items:center;gap:12px">
+                  <div class="group-emoji-Circle" style="background:${g.color || '#1E88E5'}18;color:${g.color || '#1E88E5'}">${g.emoji || '🌱'}</div>
+                  <div>
+                    <span class="badge-kelas">Kelompok #${idx + 1} • Kelas ${g.kelas || '5A'}</span>
+                    <h3 style="margin-top:3px;font-size:1.15rem">${g.name}</h3>
+                  </div>
+                </div>
+                <div style="display:flex;gap:6px">
+                  <button class="btn-secondary sm" onclick="GuruView.openEditGroupModal('${g.id}')">👥 Pilih Murid / Edit</button>
+                  <button class="btn-icon del" title="Hapus Kelompok" onclick="GuruView.deleteGroupConfirm('${g.id}', '${g.name.replace(/'/g, "\\'")}')">🗑️</button>
+                </div>
+              </div>
+
+              <!-- Daftar Akun Murid di Kelompok Ini -->
+              <div class="group-members-box">
+                <div class="group-box-label">
+                  <span>👦👧 Anggota Kelompok (${members.length} Akun Murid)</span>
+                  <button class="btn-link-sm" onclick="GuruView.openEditGroupModal('${g.id}')">+ Atur Anggota</button>
+                </div>
+                <div class="murid-chips" style="margin-top:8px">
+                  ${members.map(m => `
+                    <div class="murid-chip">
+                      <span>${m.avatar || '👦'}</span>
+                      <span><strong>${m.name}</strong> <small style="color:var(--text-muted)">(@${m.username})</small></span>
+                    </div>
+                  `).join('')}
+                  ${members.length === 0 ? `<p class="hint-text">Belum ada murid dipilih. Klik "Pilih Murid / Edit" untuk memasukkan akun murid.</p>` : ''}
+                </div>
+              </div>
+
+              <!-- Status Real-Time Pos 2 & Pos 3 -->
+              <div class="group-status-row">
+                <div class="group-status-item">
+                  <span class="status-label">🎡 Status Undian Kasus (Pos 2)</span>
+                  ${assignedCase ? `
+                    <div class="status-val done">${assignedCase.emoji} ${assignedCase.title}</div>
+                    <small>LKK Terisi: <strong>${filledCount}/5</strong> pertanyaan ${lkk?.submitted ? '✅ (Terkirim)' : '✍️ (Kolaborasi Aktif)'}</small>
+                    ${filledCount > 0 ? `<button class="btn-secondary sm" style="margin-top:6px;width:100%" onclick="GuruView.inspectGroupLKK('${g.id}')">👁️ Lihat Jawaban LKK Kelompok</button>` : ''}
+                  ` : `
+                    <div class="status-val pending">⏳ Belum Diundi Guru</div>
+                    <small>Layar murid menunggu putaran roda Guru di Pos 2</small>
+                  `}
+                </div>
+
+                <div class="group-status-item">
+                  <span class="status-label">🏆 Kuis Kelompok (Pos 3)</span>
+                  <div class="status-val score" style="color:${g.color || '#1E88E5'}">⭐ ${gPos3.totalScore || 0} Poin</div>
+                  <small>Soal Terjawab: <strong>${answeredPos3Count}</strong> soal</small>
+                </div>
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+  },
+
+  openCreateGroupModal() {
+    const allMurid = DB.getUsers().filter(u => u.role === 'murid');
+    const groups = DB.getGroups();
+
+    App.showModal(`
+      <div class="modal-form">
+        <h3>➕ Buat Kelompok Belajar Baru</h3>
+        <div class="ai-config-row">
+          <div class="form-group">
+            <label class="form-label">Nama Kelompok</label>
+            <input class="form-input" id="grp-name" placeholder="Contoh: Kelompok 4 (Bunga Matahari)">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Ikon Emoji & Warna Identitas</label>
+            <div style="display:flex;gap:10px">
+              <input class="form-input" id="grp-emoji" value="🌻" style="width:80px;text-align:center">
+              <select class="form-input" id="grp-color">
+                <option value="#43A047">🟢 Hijau Tumbuh</option>
+                <option value="#1E88E5">🔵 Biru Samudra</option>
+                <option value="#FB8C00">🟠 Oranye Semangat</option>
+                <option value="#8E24AA">🟣 Ungu Kreatif</option>
+                <option value="#E53935">🔴 Merah Berani</option>
+                <option value="#00897B">🩵 Toska Harmoni</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Pilih Manual Akun Murid untuk Masuk ke Kelompok Ini:</label>
+          <p class="form-hint" style="margin-bottom:8px">Centang akun murid yang ingin dimasukkan ke kelompok ini (jika murid sudah ada di kelompok lain, otomatis dipindahkan ke kelompok ini):</p>
+          <div class="murid-select-list">
+            ${allMurid.map(m => {
+              const currGrp = groups.find(g => (g.memberIds || []).includes(m.id));
+              return `
+                <label class="murid-select-item">
+                  <input type="checkbox" class="grp-member-cb" value="${m.id}">
+                  <span>${m.avatar || '👦'} <strong>${m.name}</strong> <small>(@${m.username} • Kelas ${m.kelas})</small></span>
+                  <span style="margin-left:auto;font-size:0.78rem;padding:3px 8px;border-radius:8px;background:${currGrp ? '#E3F2FD' : '#FFF8E1'};color:${currGrp ? '#1565C0' : '#E65100'};font-weight:800">
+                    ${currGrp ? `Saat ini: ${currGrp.name}` : 'Belum punya kelompok'}
+                  </span>
+                </label>
+              `;
+            }).join('')}
+          </div>
+        </div>
+
+        <div class="modal-actions">
+          <button class="btn-secondary" onclick="App.closeModal()">Batal</button>
+          <button class="btn-primary" onclick="GuruView.saveGroupModal(null)">💾 Buat Kelompok & Simpan Anggota</button>
+        </div>
+      </div>
+    `, 'lg');
+  },
+
+  openEditGroupModal(groupId) {
+    const grp = DB.getGroupById(groupId);
+    if (!grp) return;
+    const allMurid = DB.getUsers().filter(u => u.role === 'murid');
+    const groups = DB.getGroups();
+
+    App.showModal(`
+      <div class="modal-form">
+        <h3>👥 Kelola Kelompok & Pilih Anggota Murid: ${grp.name}</h3>
+        <div class="ai-config-row">
+          <div class="form-group">
+            <label class="form-label">Nama Kelompok</label>
+            <input class="form-input" id="grp-name" value="${grp.name}">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Ikon Emoji & Warna Identitas</label>
+            <div style="display:flex;gap:10px">
+              <input class="form-input" id="grp-emoji" value="${grp.emoji || '🌱'}" style="width:80px;text-align:center">
+              <select class="form-input" id="grp-color">
+                <option value="#43A047" ${grp.color === '#43A047' ? 'selected' : ''}>🟢 Hijau Tumbuh</option>
+                <option value="#1E88E5" ${grp.color === '#1E88E5' ? 'selected' : ''}>🔵 Biru Samudra</option>
+                <option value="#FB8C00" ${grp.color === '#FB8C00' ? 'selected' : ''}>🟠 Oranye Semangat</option>
+                <option value="#8E24AA" ${grp.color === '#8E24AA' ? 'selected' : ''}>🟣 Ungu Kreatif</option>
+                <option value="#E53935" ${grp.color === '#E53935' ? 'selected' : ''}>🔴 Merah Berani</option>
+                <option value="#00897B" ${grp.color === '#00897B' ? 'selected' : ''}>🩵 Toska Harmoni</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Pilih Akun Murid yang Masuk ke Kelompok "${grp.name}":</label>
+          <p class="form-hint" style="margin-bottom:8px">Centang atau hapus centang untuk mengatur anggota kelompok secara manual:</p>
+          <div class="murid-select-list">
+            ${allMurid.map(m => {
+              const isMember = (grp.memberIds || []).includes(m.id);
+              const otherGrp = groups.find(g => g.id !== grp.id && (g.memberIds || []).includes(m.id));
+              return `
+                <label class="murid-select-item">
+                  <input type="checkbox" class="grp-member-cb" value="${m.id}" ${isMember ? 'checked' : ''}>
+                  <span>${m.avatar || '👦'} <strong>${m.name}</strong> <small>(@${m.username} • Kelas ${m.kelas})</small></span>
+                  <span style="margin-left:auto;font-size:0.78rem;padding:3px 8px;border-radius:8px;background:${isMember ? '#E8F5E9' : otherGrp ? '#ECEFF1' : '#FFF8E1'};color:${isMember ? '#2E7D32' : otherGrp ? '#546E7A' : '#E65100'};font-weight:800">
+                    ${isMember ? '✅ Anggota Kelompok Ini' : otherGrp ? `Di ${otherGrp.name}` : 'Belum punya kelompok'}
+                  </span>
+                </label>
+              `;
+            }).join('')}
+          </div>
+        </div>
+
+        <div class="modal-actions">
+          <button class="btn-secondary" onclick="App.closeModal()">Batal</button>
+          <button class="btn-primary" onclick="GuruView.saveGroupModal('${grp.id}')">💾 Simpan Perubahan Kelompok</button>
+        </div>
+      </div>
+    `, 'lg');
+  },
+
+  saveGroupModal(groupId) {
+    const name = document.getElementById('grp-name')?.value.trim();
+    const emoji = document.getElementById('grp-emoji')?.value.trim() || '🌱';
+    const color = document.getElementById('grp-color')?.value || '#43A047';
+    const selectedMemberIds = [...document.querySelectorAll('.grp-member-cb:checked')].map(cb => cb.value);
+
+    if (!name) {
+      App.showToast('Nama kelompok wajib diisi!', 'error');
+      return;
+    }
+
+    if (groupId) {
+      DB.updateGroup(groupId, { name, emoji, color, memberIds: selectedMemberIds });
+      App.showToast(`Kelompok "${name}" (${selectedMemberIds.length} murid) berhasil diperbarui!`, 'success');
+    } else {
+      DB.addGroup({ name, emoji, color, kelas: '5A', memberIds: selectedMemberIds });
+      App.showToast(`Kelompok baru "${name}" berhasil dibuat!`, 'success');
+    }
+
+    App.closeModal();
+    this.render('kelompok');
+  },
+
+  deleteGroupConfirm(groupId, groupName) {
+    App.showModal(`
+      <div class="modal-confirm">
+        <div class="confirm-icon">🗑️</div>
+        <h3>Hapus Kelompok "${groupName}"?</h3>
+        <p>Apakah Anda yakin ingin menghapus kelompok ini? Akun murid di dalamnya tidak akan terhapus.</p>
+        <div class="confirm-actions">
+          <button class="btn-secondary" onclick="App.closeModal()">Batal</button>
+          <button class="btn-danger" onclick="GuruView.doDeleteGroup('${groupId}')">Ya, Hapus Kelompok</button>
+        </div>
+      </div>
+    `);
+  },
+
+  doDeleteGroup(groupId) {
+    DB.deleteGroup(groupId);
+    App.closeModal();
+    App.showToast('Kelompok berhasil dihapus!', 'success');
+    this.render('kelompok');
+  },
+
+  inspectGroupLKK(groupId) {
+    const grp = DB.getGroupById(groupId);
+    const pos2State = DB.getPos2State();
+    const assign = pos2State.assignments?.[groupId];
+    const caseObj = assign ? DB.getCases().find(c => c.id === assign.caseId) : null;
+    const lkk = pos2State.lkk?.[groupId] || { answers: ['', '', '', '', ''] };
+
+    if (!grp || !caseObj) return;
+
+    App.showModal(`
+      <div class="modal-form">
+        <h3>📋 Hasil Lembar Kerja Kelompok (LKK) — ${grp.emoji} ${grp.name}</h3>
+        <p style="color:var(--text-muted);font-size:0.9rem">
+          Studi Kasus: <strong>${caseObj.emoji} ${caseObj.title}</strong> •
+          Status: <strong>${lkk.submitted ? `✅ Sudah Dikirim (oleh ${lkk.submittedBy})` : `✍️ Sedang Dikerjakan (Terakhir diketik oleh ${lkk.lastTypedBy || '-'})`}</strong>
+        </p>
+        <div style="display:flex;flex-direction:column;gap:12px;max-height:55vh;overflow-y:auto;padding-right:6px">
+          ${(caseObj.pertanyaanPanduan || []).map((q, i) => `
+            <div style="background:#F8FAFC;border-left:4px solid ${grp.color || '#1E88E5'};padding:12px 16px;border-radius:10px">
+              <div style="font-size:0.8rem;font-weight:800;color:${grp.color || '#1E88E5'}">Pertanyaan ${i + 1}</div>
+              <div style="font-weight:800;margin:2px 0 6px">${q}</div>
+              <div style="background:#fff;padding:10px 12px;border-radius:8px;border:1px solid #E2E8F0;white-space:pre-wrap;font-size:0.92rem">
+                ${lkk.answers?.[i] ? lkk.answers[i] : '<em style="color:#94A3B8">(Belum diisi)</em>'}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+        <div class="modal-actions">
+          <button class="btn-primary" onclick="App.closeModal()">Tutup</button>
+        </div>
+      </div>
+    `, 'lg');
   },
 
   // ══════════════════════════════════════════════════════════
@@ -919,6 +1239,7 @@ const GuruView = {
             <tr>
               <th>#</th>
               <th>Murid</th>
+              <th>Kelompok</th>
               <th>Kelas</th>
               <th>🔭 Pos 1</th>
               <th>🎡 Pos 2</th>
@@ -931,14 +1252,17 @@ const GuruView = {
           <tbody>
             ${allMurid.map((u, i) => {
               const s = scores[u.id] || {};
+              const grp = DB.getGroupByUserId(u.id);
+              const gPos3 = grp ? DB.getPos3ForGroup(grp.id) : null;
               return `
               <tr>
                 <td>${i+1}</td>
                 <td>${u.avatar} <strong>${u.name}</strong></td>
+                <td>${grp ? `<span class="badge-kelas" style="background:${grp.color || '#1E88E5'}18;color:${grp.color || '#1E88E5'}">${grp.emoji || '👥'} ${grp.name}</span>` : '<span class="badge-pending">Belum</span>'}</td>
                 <td><span class="badge-kelas">${u.kelas}</span></td>
                 <td>${s.pos1?.completed ? '<span class="badge-done">✅ Selesai</span>' : '<span class="badge-pending">⬜ Belum</span>'}</td>
-                <td>${s.pos2?.completed ? `<span class="badge-done">✅ ${s.pos2.kelompok || 'Selesai'}</span>` : '<span class="badge-pending">⬜ Belum</span>'}</td>
-                <td>${s.pos3?.kuis !== undefined ? `<strong>${s.pos3.kuis}</strong> poin` : '-'}</td>
+                <td>${s.pos2?.completed ? `<span class="badge-done">✅ Selesai</span>` : '<span class="badge-pending">⬜ Belum</span>'}</td>
+                <td>${gPos3 ? `<strong>${gPos3.totalScore}</strong> poin` : (s.pos3?.kuis !== undefined ? `<strong>${s.pos3.kuis}</strong> poin` : '-')}</td>
                 <td>${s.pos3?.tantangan !== undefined ? `<strong>${s.pos3.tantangan}%</strong>` : '-'}</td>
                 <td>${s.pos4?.completed ? '<span class="badge-done">✅ Selesai</span>' : '<span class="badge-pending">⬜ Belum</span>'}</td>
                 <td><strong class="poin-val">${u.poin || 0} ⭐</strong></td>

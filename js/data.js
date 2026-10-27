@@ -1,5 +1,6 @@
 // ============================================================
-// DATA.JS — Default data & Media Storage untuk Petualangan TUMBUH
+// DATA.JS — Default Data, IndexedDB Media Store, & Real-Time
+//           Collaborative Synchronization Engine (RealtimeSync)
 // ============================================================
 
 const DEFAULT_DATA = {
@@ -8,17 +9,51 @@ const DEFAULT_DATA = {
   users: [
     { id: 'u1', username: 'admin',   password: 'admin123',   role: 'admin',  name: 'Administrator',       avatar: '🔑', kelas: '-' },
     { id: 'u2', username: 'guru1',   password: 'guru123',    role: 'guru',   name: 'Bu Sari Dewi',        avatar: '👩‍🏫', kelas: '5A' },
-    { id: 'u3', username: 'guru2',   password: 'guru456',    role: 'guru',   role: 'guru', name: 'Pak Budi Santoso', avatar: '👨‍🏫', kelas: '5B' },
-    { id: 'u4', username: 'murid1',  password: 'murid123',   role: 'murid',  name: 'Andi Pratama',        avatar: '🌱', kelas: '5A', poin: 0, badges: [] },
-    { id: 'u5', username: 'murid2',  password: 'murid456',   role: 'murid',  name: 'Siti Rahayu',         avatar: '🌸', kelas: '5A', poin: 0, badges: [] },
-    { id: 'u6', username: 'murid3',  password: 'murid789',   role: 'murid',  name: 'Deni Kusuma',         avatar: '⭐', kelas: '5B', poin: 0, badges: [] },
+    { id: 'u3', username: 'guru2',   password: 'guru456',    role: 'guru',   name: 'Pak Budi Santoso',    avatar: '👨‍🏫', kelas: '5B' },
+    { id: 'u4', username: 'murid1',  password: 'murid123',   role: 'murid',  name: 'Andi Pratama',        avatar: '🌱', kelas: '5A', groupId: 'g1', poin: 0, badges: [] },
+    { id: 'u5', username: 'murid2',  password: 'murid456',   role: 'murid',  name: 'Siti Rahayu',         avatar: '🌸', kelas: '5A', groupId: 'g1', poin: 0, badges: [] },
+    { id: 'u6', username: 'murid3',  password: 'murid789',   role: 'murid',  name: 'Deni Kusuma',         avatar: '⭐', kelas: '5A', groupId: 'g2', poin: 0, badges: [] },
+    { id: 'u7', username: 'murid4',  password: 'murid123',   role: 'murid',  name: 'Rina Amelia',         avatar: '🌻', kelas: '5A', groupId: 'g2', poin: 0, badges: [] },
+    { id: 'u8', username: 'murid5',  password: 'murid123',   role: 'murid',  name: 'Bima Sakti',          avatar: '🦁', kelas: '5A', groupId: 'g3', poin: 0, badges: [] },
+    { id: 'u9', username: 'murid6',  password: 'murid123',   role: 'murid',  name: 'Citra Lestari',       avatar: '🦋', kelas: '5A', groupId: 'g3', poin: 0, badges: [] },
   ],
 
   // ── CLASSES ────────────────────────────────────────────────
   kelas: [
-    { id: 'k5a', name: 'Kelas 5A', guruId: 'u2', muridIds: ['u4','u5'] },
-    { id: 'k5b', name: 'Kelas 5B', guruId: 'u3', muridIds: ['u6'] },
+    { id: 'k5a', name: 'Kelas 5A', guruId: 'u2', muridIds: ['u4','u5','u6','u7','u8','u9'] },
+    { id: 'k5b', name: 'Kelas 5B', guruId: 'u3', muridIds: [] },
   ],
+
+  // ── GROUPS (Kelompok Belajar — Dikelola Manual oleh Guru) ──
+  groups: [
+    { id: 'g1', name: 'Kelompok 1 — Tunas Hijau', emoji: '🌱', color: '#43A047', kelas: '5A', muridIds: ['u4', 'u5'] },
+    { id: 'g2', name: 'Kelompok 2 — Akar Kuat',   emoji: '🌳', color: '#1565C0', kelas: '5A', muridIds: ['u6', 'u7'] },
+    { id: 'g3', name: 'Kelompok 3 — Bunga Mekar', emoji: '🌻', color: '#FB8C00', kelas: '5A', muridIds: ['u8', 'u9'] },
+  ],
+
+  // ── POS 2 REAL-TIME STATE (Dikendalikan Guru & Kolaborasi LKK) ──
+  pos2State: {
+    turnOrder: [],        // Array of groupIds in spun order
+    activeGroupId: null,  // Group currently selected/spun by Guru
+    assignments: {},      // { [groupId]: { caseId: 'c1', assignedAt: ISO, assignedBy: 'Bu Sari' } }
+    lkk: {}               // { [groupId]: { answers: ['','','','',''], typing: { userName: '', fieldIdx: -1, ts: 0 }, submitted: false, score: 0, submittedAt: null } }
+  },
+
+  // ── POS 3 REAL-TIME GROUP QUIZ STATE ───────────────────────
+  pos3GroupState: {
+    // Per-group synchronized quiz state so each group only sees its own quiz & syncs options live
+    groups: {}
+    // Structure per groupId:
+    // {
+    //   currentIdx: 0,
+    //   selectedOption: null,
+    //   selectedBy: null,
+    //   lockedAnswers: { [qIdx]: { selected: 1, correct: 1, isCorrect: true, points: 10, lockedBy: 'Andi' } },
+    //   totalScore: 0,
+    //   completed: false,
+    //   lastFeedback: null // { qIdx, isCorrect, points, correctText, explanation, lockedBy, ts }
+    // }
+  },
 
   // ── TOPICS — Pos 1 ─────────────────────────────────────────
   topics: [
@@ -235,7 +270,6 @@ const DEFAULT_DATA = {
 
   // ── QUIZ QUESTIONS — Pos 3 Kuis Kejutan (Kelompok) ─────────
   kuisKejutan: [
-    // Babak Utama (6 soal)
     {
       id: 'kk1', babak: 'utama', no: 1,
       pertanyaan: 'Makhluk hidup yang tidak dapat membuat makanan sendiri dan bergantung pada makhluk hidup lain disebut...',
@@ -293,7 +327,6 @@ const DEFAULT_DATA = {
       jawaban: 2,
       penjelasan: 'Presipitasi adalah jatuhnya air dari awan ke permukaan bumi dalam bentuk hujan, salju, atau es.'
     },
-    // Babak Penentuan (4 soal)
     {
       id: 'kk7', babak: 'penentuan', no: 7,
       pertanyaan: 'Jika populasi katak di sawah punah, apa yang akan terjadi pada populasi belalang?',
@@ -458,6 +491,68 @@ const DEFAULT_DATA = {
   }
 };
 
+// ── Real-Time Synchronization Engine (BroadcastChannel + Storage + Optional WS) ──
+const RealtimeSync = {
+  _channel: null,
+  _listeners: [],
+  _clientId: 'client_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+  _ws: null,
+
+  init() {
+    // 1. BroadcastChannel for instant multi-tab / multi-window real-time sync
+    if (typeof BroadcastChannel !== 'undefined') {
+      this._channel = new BroadcastChannel('petualangan_tumbuh_realtime');
+      this._channel.onmessage = (e) => {
+        if (e.data && e.data.senderId !== this._clientId) {
+          this._notify(e.data);
+        }
+      };
+    }
+
+    // 2. Storage event listener as universal fallback across browser windows
+    window.addEventListener('storage', (e) => {
+      if (e.key === 'tumbuh_rt_event' && e.newValue) {
+        try {
+          const payload = JSON.parse(e.newValue);
+          if (payload.senderId !== this._clientId) {
+            this._notify(payload);
+          }
+        } catch {}
+      }
+    });
+  },
+
+  emit(eventType, data = {}) {
+    const payload = {
+      senderId: this._clientId,
+      type: eventType,
+      data,
+      ts: Date.now()
+    };
+
+    if (this._channel) {
+      try { this._channel.postMessage(payload); } catch {}
+    }
+
+    try {
+      localStorage.setItem('tumbuh_rt_event', JSON.stringify(payload));
+    } catch {}
+  },
+
+   subscribe(callback) {
+    this._listeners.push(callback);
+    return () => {
+      this._listeners = this._listeners.filter(cb => cb !== callback);
+    };
+  },
+
+  _notify(payload) {
+    this._listeners.forEach(cb => {
+      try { cb(payload); } catch (err) { console.error(err); }
+    });
+  }
+};
+
 // ── IndexedDB Media Store for Large Local Files (Video/PDF/Images) ──
 const MediaDB = {
   _dbName: 'PetualanganTumbuhMediaDB',
@@ -553,6 +648,30 @@ const DB = {
         this.set(key, DEFAULT_DATA[key]);
       }
     });
+
+    // Migrate legacy users/groups if needed
+    const groups = this.get('groups') || DEFAULT_DATA.groups;
+    const users = this.get('users') || [];
+    let usersUpdated = false;
+    // Add extra demo students if missing
+    DEFAULT_DATA.users.forEach(defU => {
+      if (!users.some(u => u.id === defU.id)) {
+        users.push(defU);
+        usersUpdated = true;
+      }
+    });
+    // Ensure groupId is synced from groups.muridIds
+    groups.forEach(g => {
+      (g.muridIds || []).forEach(uid => {
+        const u = users.find(x => x.id === uid);
+        if (u && u.groupId !== g.id) {
+          u.groupId = g.id;
+          usersUpdated = true;
+        }
+      });
+    });
+    if (usersUpdated) this.set('users', users);
+
     // Ensure tantanganAkhir has type property on legacy saved items
     const ta = this.get('tantanganAkhir') || [];
     let updated = false;
@@ -565,6 +684,8 @@ const DB = {
       updated = true;
     }
     if (updated) this.set('tantanganAkhir', ta);
+
+    RealtimeSync.init();
   },
 
   get(key) {
@@ -584,6 +705,7 @@ const DB = {
     });
     MediaDB.clearAll();
     this.init();
+    RealtimeSync.emit('SYSTEM_RESET', {});
   },
 
   // Users
@@ -608,6 +730,269 @@ const DB = {
   deleteUser(id) {
     const users = this.getUsers().filter(u => u.id !== id);
     this.saveUsers(users);
+  },
+
+  // Groups (Kelompok Belajar)
+  getGroups() { return this.get('groups') || []; },
+  getGroupById(id) { return this.getGroups().find(g => g.id === id) || null; },
+  getGroupByUserId(userId) {
+    const u = this.getUserById(userId);
+    if (u && u.groupId) {
+      const byAttr = this.getGroupById(u.groupId);
+      if (byAttr) return byAttr;
+    }
+    return this.getGroups().find(g => (g.muridIds || []).includes(userId)) || null;
+  },
+  saveGroups(groups) {
+    this.set('groups', groups);
+    // Sync each murid's groupId attribute so login/session always knows their group
+    const users = this.getUsers();
+    users.forEach(u => {
+      if (u.role === 'murid') {
+        const foundGroup = groups.find(g => (g.muridIds || []).includes(u.id));
+        u.groupId = foundGroup ? foundGroup.id : null;
+      }
+    });
+    this.saveUsers(users);
+    RealtimeSync.emit('GROUPS_UPDATED', { groups });
+  },
+  addGroup(group) {
+    const groups = this.getGroups();
+    group.id = group.id || ('g' + Date.now());
+    group.muridIds = group.muridIds || [];
+    // Ensure a student is only in one group at a time
+    groups.forEach(g => {
+      g.muridIds = (g.muridIds || []).filter(id => !group.muridIds.includes(id));
+    });
+    groups.push(group);
+    this.saveGroups(groups);
+    return group;
+  },
+  updateGroup(groupId, data) {
+    const groups = this.getGroups();
+    if (data.muridIds) {
+      groups.forEach(g => {
+        if (g.id !== groupId) {
+          g.muridIds = (g.muridIds || []).filter(id => !data.muridIds.includes(id));
+        }
+      });
+    }
+    const updated = groups.map(g => g.id === groupId ? { ...g, ...data } : g);
+    this.saveGroups(updated);
+  },
+  deleteGroup(groupId) {
+    const groups = this.getGroups().filter(g => g.id !== groupId);
+    this.saveGroups(groups);
+  },
+
+  // Pos 2 Real-Time State (Wheel Spin by Guru & Collaborative LKK)
+  getPos2State() {
+    return this.get('pos2State') || { turnOrder: [], activeGroupId: null, assignments: {}, lkk: {} };
+  },
+  savePos2State(state, eventType = 'POS2_STATE_UPDATED', eventPayload = {}) {
+    this.set('pos2State', state);
+    RealtimeSync.emit(eventType, { state, ...eventPayload });
+  },
+  assignCaseToGroup(groupId, caseId, guruName = 'Guru') {
+    const state = this.getPos2State();
+    state.activeGroupId = groupId;
+    if (!state.turnOrder.includes(groupId)) {
+      state.turnOrder.push(groupId);
+    }
+    state.assignments[groupId] = {
+      caseId,
+      assignedAt: new Date().toISOString(),
+      assignedBy: guruName
+    };
+    if (!state.lkk[groupId]) {
+      state.lkk[groupId] = {
+        answers: ['', '', '', '', ''],
+        typing: null,
+        submitted: false,
+        score: 0,
+        submittedAt: null
+      };
+    }
+    this.savePos2State(state, 'POS2_CASE_ASSIGNED', { groupId, caseId });
+  },
+  updatePos2LKKField(groupId, fieldIdx, text, userName) {
+    const state = this.getPos2State();
+    if (!state.lkk[groupId]) {
+      state.lkk[groupId] = { answers: ['', '', '', '', ''], typing: null, submitted: false, score: 0 };
+    }
+    state.lkk[groupId].answers[fieldIdx] = text;
+    state.lkk[groupId].typing = { userName, fieldIdx, ts: Date.now() };
+    this.savePos2State(state, 'POS2_LKK_TYPING', { groupId, fieldIdx, text, userName });
+  },
+  submitPos2LKK(groupId, submittedBy) {
+    const state = this.getPos2State();
+    if (!state.lkk[groupId]) return null;
+    const answers = state.lkk[groupId].answers || [];
+    const filledCount = answers.filter(a => (a || '').trim().length > 0).length;
+    const pointsEarned = filledCount * 4; // 5 questions * 4 = 20 points max
+    state.lkk[groupId].submitted = true;
+    state.lkk[groupId].score = pointsEarned;
+    state.lkk[groupId].submittedBy = submittedBy;
+    state.lkk[groupId].submittedAt = new Date().toISOString();
+
+    // Award points & save score for all members of this group
+    const group = this.getGroupById(groupId);
+    const caseId = state.assignments[groupId]?.caseId;
+    if (group && group.muridIds) {
+      const users = this.getUsers();
+      group.muridIds.forEach(uid => {
+        const u = users.find(x => x.id === uid);
+        if (u) {
+          u.poin = (u.poin || 0) + pointsEarned;
+          if (!u.badges) u.badges = [];
+          if (!u.badges.includes('pos2_done')) u.badges.push('pos2_done');
+        }
+        this.saveScore(uid, 'pos2', {
+          completed: true,
+          lastCase: caseId,
+          jawaban: answers,
+          kelompok: group.name,
+          groupId: group.id,
+          score: pointsEarned
+        });
+      });
+      this.saveUsers(users);
+    }
+
+    this.savePos2State(state, 'POS2_LKK_SUBMITTED', { groupId, pointsEarned, submittedBy });
+    return pointsEarned;
+  },
+  resetPos2State() {
+    const fresh = { turnOrder: [], activeGroupId: null, assignments: {}, lkk: {} };
+    this.savePos2State(fresh, 'POS2_RESET', {});
+  },
+
+  // Pos 3 Real-Time Group Quiz State
+  getPos3GroupState() {
+    return this.get('pos3GroupState') || { groups: {} };
+  },
+  getPos3ForGroup(groupId) {
+    const all = this.getPos3GroupState();
+    if (!all.groups[groupId]) {
+      all.groups[groupId] = {
+        currentIdx: 0,
+        selectedOption: null,
+        selectedBy: null,
+        lockedAnswers: {},
+        totalScore: 0,
+        completed: false,
+        lastFeedback: null
+      };
+      this.set('pos3GroupState', all);
+    }
+    return all.groups[groupId];
+  },
+  selectPos3GroupOption(groupId, qIdx, optionIdx, userName) {
+    const all = this.getPos3GroupState();
+    const gState = this.getPos3ForGroup(groupId);
+    if (gState.lockedAnswers[qIdx]) return; // already submitted
+    gState.currentIdx = qIdx;
+    gState.selectedOption = optionIdx;
+    gState.selectedBy = userName;
+    all.groups[groupId] = gState;
+    this.set('pos3GroupState', all);
+    RealtimeSync.emit('POS3_OPTION_SELECTED', { groupId, qIdx, optionIdx, userName, gState });
+  },
+  submitPos3GroupAnswer(groupId, qIdx, userName) {
+    const all = this.getPos3GroupState();
+    const gState = this.getPos3ForGroup(groupId);
+    if (gState.lockedAnswers[qIdx]) return gState.lockedAnswers[qIdx];
+
+    const questions = this.getKuisKejutan();
+    const q = questions[qIdx];
+    if (!q) return null;
+
+    const selected = gState.selectedOption !== null ? gState.selectedOption : -1;
+    const isCorrect = selected === q.jawaban;
+    const settings = this.getSettings();
+    const points = isCorrect ? (settings.pointsBenar || 10) : (settings.pointsSalah || 0);
+
+    const record = {
+      qIdx,
+      selected,
+      correct: q.jawaban,
+      isCorrect,
+      points,
+      lockedBy: userName,
+      lockedAt: new Date().toISOString()
+    };
+
+    gState.lockedAnswers[qIdx] = record;
+    gState.totalScore = Object.values(gState.lockedAnswers).reduce((sum, r) => sum + (r.points || 0), 0);
+    gState.lastFeedback = {
+      qIdx,
+      no: qIdx + 1,
+      isCorrect,
+      points,
+      totalScore: gState.totalScore,
+      selectedText: selected >= 0 ? q.pilihan[selected] : '(Waktu Habis / Tidak Memilih)',
+      correctText: q.pilihan[q.jawaban],
+      explanation: q.penjelasan || '',
+      lockedBy: userName,
+      ts: Date.now()
+    };
+
+    if (Object.keys(gState.lockedAnswers).length >= questions.length) {
+      gState.completed = true;
+    }
+
+    all.groups[groupId] = gState;
+    this.set('pos3GroupState', all);
+
+    // Sync score to group members
+    const group = this.getGroupById(groupId);
+    if (group && group.muridIds) {
+      const users = this.getUsers();
+      group.muridIds.forEach(uid => {
+        const u = users.find(x => x.id === uid);
+        if (u && points > 0) {
+          u.poin = (u.poin || 0) + points;
+        }
+        if (u && gState.completed) {
+          if (!u.badges) u.badges = [];
+          if (!u.badges.includes('pos3_done')) u.badges.push('pos3_done');
+        }
+        const existing = this.getScoreByUser(uid);
+        this.saveScore(uid, 'pos3', {
+          ...existing.pos3,
+          kuis: gState.totalScore,
+          groupId: group.id,
+          kelompok: group.name
+        });
+      });
+      this.saveUsers(users);
+    }
+
+    RealtimeSync.emit('POS3_ANSWER_SUBMITTED', { groupId, qIdx, record, gState });
+    return record;
+  },
+  navigatePos3GroupQuestion(groupId, nextIdx) {
+    const all = this.getPos3GroupState();
+    const gState = this.getPos3ForGroup(groupId);
+    const questions = this.getKuisKejutan();
+    if (nextIdx < 0 || nextIdx >= questions.length) return;
+    gState.currentIdx = nextIdx;
+    const locked = gState.lockedAnswers[nextIdx];
+    gState.selectedOption = locked ? locked.selected : null;
+    gState.selectedBy = locked ? locked.lockedBy : null;
+    all.groups[groupId] = gState;
+    this.set('pos3GroupState', all);
+    RealtimeSync.emit('POS3_QUESTION_CHANGED', { groupId, nextIdx, gState });
+  },
+  resetPos3Group(groupId) {
+    const all = this.getPos3GroupState();
+    if (groupId) {
+      delete all.groups[groupId];
+    } else {
+      all.groups = {};
+    }
+    this.set('pos3GroupState', all);
+    RealtimeSync.emit('POS3_RESET', { groupId });
   },
 
   // Topics (Pos 1)

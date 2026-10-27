@@ -1,21 +1,17 @@
 // ============================================================
-// POS3.JS — Pos 3: Kuis Kejutan (Kelompok - 15s Option Delay Timer)
-//           & Tantangan Akhir (Individu - Pilihan Ganda & Esai)
+// POS3.JS — Pos 3: Kuis Kejutan (Kelompok - Real-Time Terpusat
+//           per ID Kelompok, Timer 15 Detik, Navigasi Sebelumnya/Setelahnya,
+//           & Feedback Poin Otomatis) + Tantangan Akhir (Individu PG & Esai)
 // ============================================================
 
 const Pos3View = {
-  // Kuis Kejutan (Kelompok) state
-  _kk: {
-    questions: [],
-    currentIdx: 0,
-    scores: {},
-    kelompok: [],
-    phase: 'setup',
-    answered: false,
-    revealTimer: null,
-    revealTimeLeft: 15,
-    optionsRevealed: false,
-  },
+  _mode: 'menu', // 'menu' | 'kelompok' | 'tantangan'
+  _syncBound: false,
+
+  // Local 15s timer for Kuis Kelompok
+  _kkTimer: null,
+  _kkTimeLeft: 15,
+  _guruSelectedGroupId: null, // For Guru monitoring or presenting
 
   // Tantangan Akhir (Individu: PG & Esai) state
   _ta: {
@@ -29,14 +25,88 @@ const Pos3View = {
     phase: 'start',
   },
 
+  _ensureSyncSubscribed() {
+    if (this._syncBound || typeof RealtimeSync === 'undefined') return;
+    this._syncBound = true;
+
+    RealtimeSync.subscribe((msg) => {
+      const viewEl = document.getElementById('view-pos3');
+      if (!viewEl || !viewEl.classList.contains('active')) return;
+      if (this._mode !== 'kelompok') return;
+
+      const user = Auth.getCurrentUser();
+      if (!user) return;
+
+      const myGroup = user.role === 'murid'
+        ? Auth.getCurrentGroup()
+        : DB.getGroupById(this._guruSelectedGroupId || DB.getGroups()[0]?.id);
+
+      const { groupId, qIdx, optionIdx, userName, answerRecord, totalScore } = msg.payload || {};
+
+      // 1. Live Option Selection by a Group Member
+      if (msg.event === 'POS3_OPTION_SELECTED') {
+        if (myGroup && myGroup.id === groupId) {
+          this._updateLiveGroupOptionUI(qIdx, optionIdx, userName);
+        }
+        if (user.role !== 'murid') {
+          this._refreshGuruLiveScoreboard();
+        }
+        return;
+      }
+
+      // 2. Group Answer Locked & Submitted -> Show Automatic Point Feedback Pop-up!
+      if (msg.event === 'POS3_ANSWER_SUBMITTED') {
+        if (myGroup && myGroup.id === groupId) {
+          this._clearAllTimers();
+          this._renderGroupKuisQuestion(myGroup, false);
+
+          const questions = DB.getKuisKejutan();
+          const q = questions[qIdx];
+          if (q && answerRecord) {
+            App.showPointFeedback({
+              groupName: `${myGroup.emoji || '👥'} ${myGroup.name}`,
+              pointsEarned: answerRecord.points || 0,
+              totalScore: totalScore || 0,
+              isCorrect: !!answerRecord.isCorrect,
+              title: answerRecord.isCorrect ? 'Jawaban Kelompok BENAR!' : 'Jawaban Kelompok Belum Tepat',
+              subtitle: `Soal #${qIdx + 1} • Dikirim oleh ${answerRecord.submittedBy || 'Anggota Kelompok'}`,
+              detail: `Kunci Jawaban: ${'ABCD'[q.jawaban]}. ${q.pilihan[q.jawaban]}${q.penjelasan ? ' — ' + q.penjelasan : ''}`
+            });
+          }
+        }
+        if (user.role !== 'murid') {
+          this._refreshGuruLiveScoreboard();
+        }
+        return;
+      }
+
+      // 3. Group Navigated to Previous / Next Question
+      if (msg.event === 'POS3_QUESTION_CHANGED' || msg.event === 'POS3_RESET') {
+        if (myGroup && myGroup.id === groupId) {
+          this._clearAllTimers();
+          this._renderGroupKuisQuestion(myGroup, true);
+        }
+        if (user.role !== 'murid') {
+          this._refreshGuruLiveScoreboard();
+        }
+        return;
+      }
+    });
+  },
+
   render() {
+    this._ensureSyncSubscribed();
     this._clearAllTimers();
+    this._mode = 'menu';
+
     const user = Auth.getCurrentUser();
     const backTarget = (user?.role === 'guru' || user?.role === 'admin') ? 'dashboard' : 'murid';
     const kkList = DB.getKuisKejutan();
     const taList = DB.getTantanganAkhir();
     const pgCount = taList.filter(q => (q.type || 'pg') === 'pg').length;
     const esaiCount = taList.filter(q => q.type === 'esai').length;
+    const myGroup = user?.role === 'murid' ? Auth.getCurrentGroup() : null;
+    const myGroupPos3 = myGroup ? DB.getPos3ForGroup(myGroup.id) : null;
 
     const el = document.getElementById('view-pos3');
     el.innerHTML = `
@@ -47,8 +117,20 @@ const Pos3View = {
           <div class="pos-header-content">
             <div class="pos-header-num">POS 3</div>
             <h1 class="pos-header-title">🏆 Kuis Kejutan & Tantangan Akhir</h1>
-            <p class="pos-header-desc">Evaluasi pemahamanmu melalui Kuis Kompetisi Kelompok dan Asesmen Individu (Pilihan Ganda & Esai)!</p>
+            <p class="pos-header-desc">Evaluasi pemahamanmu melalui Kuis Kompetisi Kelompok Real-Time dan Asesmen Individu (Pilihan Ganda & Esai)!</p>
           </div>
+          ${myGroup ? `
+            <div class="mini-group-scoreboard">
+              <div class="mgs-top">
+                <span class="mgs-emoji">${myGroup.emoji || '👥'}</span>
+                <div>
+                  <div class="mgs-name">${myGroup.name}</div>
+                  <div class="mgs-sub">🟢 Terhubung ke Kelompok</div>
+                </div>
+              </div>
+              <div class="mgs-points">⭐ <strong>${myGroupPos3?.totalScore || 0}</strong> Poin Kuis</div>
+            </div>
+          ` : ''}
           ${(Auth.isGuru() || Auth.isAdmin()) ? `
             <button class="pos-back-btn" onclick="Pos3View._clearAllTimers(); App.navigate('guru',{tab:'kuis'})">✏️ Kelola Soal PG & Esai</button>
           ` : ''}
@@ -58,21 +140,21 @@ const Pos3View = {
         <div class="pos-content pos3-menu-content" id="pos3-menu">
           <h2 class="pos3-menu-title">Pilih Mode Evaluasi Pembelajaran</h2>
           <div class="pos3-cards">
-            <!-- Kuis Kejutan (Kelompok) -->
+            <!-- Kuis Kejutan (Kelompok Real-Time) -->
             <div class="pos3-mode-card kuis">
               <div class="pos3-mode-header">
                 <span class="pos3-mode-emoji">⚡</span>
-                <div class="pos3-mode-badge">Kompetisi Kelompok</div>
+                <div class="pos3-mode-badge">Kompetisi Kelompok (Real-Time Sync)</div>
               </div>
               <h2>Kuis Kejutan (Kelompok)</h2>
-              <p>Kompetisi seru antar kelompok! Soal beserta pilihan jawaban ditayangkan selama 15 detik hitung mundur sebelum kunci jawaban muncul.</p>
+              <p>Akses terpusat khusus kelompokmu! Pilihan jawaban disinkronkan secara langsung antar anggota kelompok dengan hitung mundur 15 detik.</p>
               <ul class="pos3-mode-features">
-                <li>⚡ ${kkList.length} soal kompetisi (Babak Utama & Penentuan)</li>
-                <li>⏱️ Soal & pilihan jawaban tampil dengan timer 15 detik</li>
-                <li>🏅 Papan skor digital langsung (+10 poin benar, 0 salah)</li>
-                <li>🔄 Navigasi ke soal/jawaban sebelumnya & setelahnya</li>
+                <li>👥 ${myGroup ? `Ruang Khusus: <strong>${myGroup.emoji || ''} ${myGroup.name}</strong>` : 'Tampilan terisolasi & tersinkronisasi per kelompok'}</li>
+                <li>⚡ ${kkList.length} soal kompetisi (6 Babak Utama & 4 Penentuan)</li>
+                <li>⏱️ Soal & pilihan jawaban tampil bersama timer 15 detik</li>
+                <li>🏅 Pop-up feedback poin otomatis (+10 benar, 0 salah)</li>
               </ul>
-              <button class="btn-pos3-kuis" onclick="Pos3View.startKuisSetup()">⚡ Mulai Kuis Kelompok!</button>
+              <button class="btn-pos3-kuis" onclick="Pos3View.openKuisKelompok()">⚡ Masuk Ruang Kuis Kelompok!</button>
             </div>
 
             <!-- Tantangan Akhir (Individu: PG & Esai) -->
@@ -103,9 +185,9 @@ const Pos3View = {
   },
 
   _clearAllTimers() {
-    if (this._kk.revealTimer) {
-      clearInterval(this._kk.revealTimer);
-      this._kk.revealTimer = null;
+    if (this._kkTimer) {
+      clearInterval(this._kkTimer);
+      this._kkTimer = null;
     }
     if (this._ta.timer) {
       clearInterval(this._ta.timer);
@@ -114,419 +196,501 @@ const Pos3View = {
   },
 
   // ══════════════════════════════════════════════════════════
-  // 1. KUIS KEJUTAN (KELOMPOK - PILIHAN MUNCUL SETELAH 15 DETIK)
+  // 1. KUIS KEJUTAN (KELOMPOK - TERISOLASI PER ID KELOMPOK & REAL-TIME)
   // ══════════════════════════════════════════════════════════
-  startKuisSetup() {
+  openKuisKelompok() {
     this._clearAllTimers();
+    this._mode = 'kelompok';
     document.getElementById('pos3-menu').style.display = 'none';
     const area = document.getElementById('pos3-kuis-area');
     area.style.display = 'block';
-    area.innerHTML = `
-      <div class="kuis-setup">
-        <div class="kuis-setup-header">
-          <h2>⚡ Kuis Kejutan — Pendaftaran Kelompok Kompetisi</h2>
-          <p>Daftarkan kelompok yang akan bertanding! Setiap soal beserta pilihan jawaban ditampilkan dengan timer 15 detik sebelum kunci jawaban muncul.</p>
-        </div>
-        <div class="kelompok-setup-grid">
-          <div class="kelompok-input-section">
-            <label class="form-label">👥 Tambah Kelompok Peserta (Minimal 2 Kelompok)</label>
-            <div class="kelompok-add-row">
-              <input type="text" id="kk-kelompok-input" class="form-input" placeholder="Masukkan nama kelompok...">
-              <button class="btn-primary" onclick="Pos3View.addKelompok()">➕ Tambah</button>
+
+    const user = Auth.getCurrentUser();
+    if (!user) return;
+
+    if (user.role === 'murid') {
+      const myGroup = Auth.getCurrentGroup();
+      if (!myGroup) {
+        area.innerHTML = `
+          <div class="pos-content">
+            <div class="pos2-waiting-card">
+              <div class="waiting-pulse-icon">👥</div>
+              <h2>Akunmu Belum Masuk ke Kelompok Belajar</h2>
+              <p>Mintalah Bapak/Ibu Guru untuk memasukkan akunmu (<strong>${user.name}</strong>) ke dalam kelompok melalui menu <strong>Manajemen Kelompok</strong> di Dasbor Guru.</p>
+              <button class="btn-secondary" style="margin-top:14px" onclick="Pos3View.render()">← Kembali ke Menu Pos 3</button>
             </div>
-            <div id="kk-kelompok-list" class="kelompok-list-chips"></div>
           </div>
-          <div class="kuis-setup-preview">
-            <h3>📋 Aturan Kuis Kelompok</h3>
-            <div class="setup-info-row"><span>Babak Utama</span><strong>6 Soal</strong></div>
-            <div class="setup-info-row"><span>Babak Penentuan</span><strong>4 Soal</strong></div>
-            <div class="setup-info-row"><span>Waktu Menjawab per Soal</span><strong>⏱️ 15 Detik Visual</strong></div>
-            <div class="setup-info-row"><span>Poin Jawaban Benar</span><strong>+10 Poin</strong></div>
-            <div class="setup-info-row"><span>Poin Jawaban Salah</span><strong>0 Poin</strong></div>
-          </div>
-        </div>
-        <div class="setup-actions">
-          <button class="btn-secondary" onclick="Pos3View.render()">← Kembali ke Menu Pos 3</button>
-          <button class="btn-primary lg" onclick="Pos3View.startKuisGame()">🚀 Mulai Kompetisi Sekarang!</button>
-        </div>
-      </div>`;
-
-    this._kk.kelompok = [];
-    this._kk.scores = {};
-    ['Kelompok Matahari', 'Kelompok Bintang', 'Kelompok Pelangi'].forEach(k => this.addKelompok(k));
-  },
-
-  addKelompok(name) {
-    const input = document.getElementById('kk-kelompok-input');
-    const n = name || input?.value.trim();
-    if (!n) { App.showToast('Masukkan nama kelompok!', 'error'); return; }
-    if (this._kk.kelompok.includes(n)) { App.showToast('Nama kelompok sudah ada!', 'warning'); return; }
-
-    this._kk.kelompok.push(n);
-    this._kk.scores[n] = 0;
-    if (input) input.value = '';
-    this._renderKelompokChips();
-  },
-
-  removeKelompok(name) {
-    this._kk.kelompok = this._kk.kelompok.filter(k => k !== name);
-    delete this._kk.scores[name];
-    this._renderKelompokChips();
-  },
-
-  _renderKelompokChips() {
-    const listEl = document.getElementById('kk-kelompok-list');
-    if (listEl) {
-      listEl.innerHTML = this._kk.kelompok.map(k => `
-        <div class="kelompok-chip-item">
-          <span>👥 ${k}</span>
-          <button onclick="Pos3View.removeKelompok('${k.replace(/'/g, "\\'")}')">✕</button>
-        </div>`).join('');
+        `;
+        return;
+      }
+      this._renderGroupKuisQuestion(myGroup, true);
+    } else {
+      // Guru / Admin View: Live All-Group Scoreboard + Group Selector to Monitor/Control
+      const groups = DB.getGroups();
+      if (!this._guruSelectedGroupId && groups.length > 0) {
+        this._guruSelectedGroupId = groups[0].id;
+      }
+      const selectedGroup = DB.getGroupById(this._guruSelectedGroupId) || groups[0];
+      this._renderGroupKuisQuestion(selectedGroup, true);
     }
   },
 
-  startKuisGame() {
-    if (this._kk.kelompok.length < 2) {
-      App.showToast('Minimal 2 kelompok untuk berkompetisi!', 'error');
+  selectGuruMonitorGroup(groupId) {
+    this._guruSelectedGroupId = groupId;
+    const grp = DB.getGroupById(groupId);
+    if (grp) {
+      this._clearAllTimers();
+      this._renderGroupKuisQuestion(grp, true);
+    }
+  },
+
+  _refreshGuruLiveScoreboard() {
+    const sbEl = document.getElementById('kk-live-scoreboard-list');
+    if (sbEl) {
+      sbEl.innerHTML = this._buildGroupScoreboardHTML();
+    }
+  },
+
+  _buildGroupScoreboardHTML() {
+    const user = Auth.getCurrentUser();
+    const isGuru = user?.role === 'guru' || user?.role === 'admin';
+    const myGroup = user?.role === 'murid' ? Auth.getCurrentGroup() : null;
+
+    // For Murid: Isolate view to their own group scoreboard & stats (or show their group card prominently)
+    if (!isGuru && myGroup) {
+      const gState = DB.getPos3ForGroup(myGroup.id);
+      const totalQ = DB.getKuisKejutan().length;
+      const answeredCount = Object.keys(gState.answers || {}).length;
+      const correctCount = Object.values(gState.answers || {}).filter(a => a.isCorrect).length;
+      const members = DB.getUsers().filter(u => (myGroup.memberIds || []).includes(u.id));
+
+      return `
+        <div class="isolated-group-scorecard" style="border-left: 5px solid #FB8C00">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+            <span style="font-size:2rem">${myGroup.emoji || '👥'}</span>
+            <div>
+              <strong style="font-size:1.05rem;display:block">${myGroup.name}</strong>
+              <small style="color:var(--text-muted)">🟢 Jawaban Disinkronkan Bersama</small>
+            </div>
+          </div>
+          <div class="isolated-score-big">
+            <span>Total Skor Kelompok</span>
+            <strong id="isolated-group-total-score">${gState.totalScore || 0} Poin</strong>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:0.82rem;font-weight:800;color:var(--text-muted);margin:10px 0">
+            <span>Terjawab: ${answeredCount}/${totalQ}</span>
+            <span style="color:#2E7D32">Benar: ${correctCount} Soal</span>
+          </div>
+          <div style="border-top:1px solid #ECEFF1;padding-top:10px;margin-top:6px">
+            <small style="font-weight:800;color:var(--text-muted);display:block;margin-bottom:6px">👦👧 Anggota Kelompok Aktif:</small>
+            <div style="display:flex;flex-direction:column;gap:5px">
+              ${members.map(m => `
+                <div style="display:flex;align-items:center;gap:6px;font-size:0.84rem;font-weight:700">
+                  <span>${m.avatar || '👦'}</span>
+                  <span>${m.name} ${m.id === user.id ? '<strong style="color:#1565C0">(Kamu)</strong>' : ''}</span>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // For Guru / Admin: Show all groups live scoreboard & switcher
+    const groups = DB.getGroups();
+    const sorted = [...groups].sort((a, b) => {
+      const sa = DB.getPos3ForGroup(a.id).totalScore || 0;
+      const sb = DB.getPos3ForGroup(b.id).totalScore || 0;
+      return sb - sa;
+    });
+    const medals = ['🥇', '🥈', '🥉'];
+
+    return sorted.map((g, i) => {
+      const gs = DB.getPos3ForGroup(g.id);
+      const isSelected = this._guruSelectedGroupId === g.id;
+      return `
+        <div class="score-row-kuis ${i === 0 ? 'leader' : ''}"
+          style="cursor:pointer;${isSelected ? 'outline:2px solid #1565C0;background:#E3F2FD' : ''}"
+          onclick="Pos3View.selectGuruMonitorGroup('${g.id}')">
+          <span class="score-medal">${medals[i] || `${i + 1}.`}</span>
+          <span class="score-name">${g.emoji || '👥'} ${g.name}</span>
+          <span class="score-poin">${gs.totalScore || 0} poin</span>
+        </div>
+      `;
+    }).join('');
+  },
+
+  _renderGroupKuisQuestion(groupObj, startTimerIfUnanswered = true) {
+    this._clearAllTimers();
+    const area = document.getElementById('pos3-kuis-area');
+    if (!area || !groupObj) return;
+
+    const user = Auth.getCurrentUser();
+    const isGuru = user?.role === 'guru' || user?.role === 'admin';
+    const questions = DB.getKuisKejutan();
+    const gState = DB.getPos3ForGroup(groupObj.id);
+    const currentIdx = Math.max(0, Math.min(gState.currentIdx || 0, questions.length - 1));
+    const q = questions[currentIdx];
+
+    if (!q) {
+      this._renderGroupKuisFinalResult(groupObj);
       return;
     }
 
-    const allQ = DB.getKuisKejutan();
-    this._kk.questions = allQ;
-    this._kk.currentIdx = 0;
-    this._kk.phase = 'playing';
-    this._kk.answered = false;
-    this._kk.kelompok.forEach(k => { this._kk.scores[k] = 0; });
+    const isLast = currentIdx >= questions.length - 1;
+    const isPenentuan = q.babak === 'penentuan';
+    const submittedAnswer = gState.answers?.[currentIdx] || null;
+    const livePick = gState.selectedOptions?.[currentIdx] || null;
+    const isAnswered = !!submittedAnswer;
 
-    this._renderKuisQuestion();
-  },
-
-  _renderKuisQuestion() {
-    this._clearAllTimers();
-    const area = document.getElementById('pos3-kuis-area');
-    const q = this._kk.questions[this._kk.currentIdx];
-    const isLast = this._kk.currentIdx >= this._kk.questions.length - 1;
-    const isPenentuan = q?.babak === 'penentuan';
-    const settings = DB.getSettings();
-
-    if (!q) { this._renderKuisResult(); return; }
-
-    this._kk.revealTimeLeft = 15;
-    this._kk.optionsRevealed = false;
-    this._kk.answered = false;
+    this._kkTimeLeft = 15;
     const circumference = 2 * Math.PI * 44;
 
     area.innerHTML = `
       <div class="kuis-game-layout">
-        <!-- Scoreboard -->
+        <!-- Left Sidebar: Papan Skor Mini Kelompok (Isolated for Murid, All-Group for Guru) -->
         <div class="kuis-scoreboard">
           <div class="scoreboard-header">
-            <span>🏆 Papan Skor Digital</span>
-            <span class="soal-counter">Soal ${this._kk.currentIdx + 1}/${this._kk.questions.length}</span>
+            <span>🏆 ${isGuru ? 'Pantauan Skor Kelompok' : 'Papan Skor Kelompokmu'}</span>
+            <span class="soal-counter">Soal ${currentIdx + 1}/${questions.length}</span>
           </div>
-          <div class="scoreboard-list">
-            ${this._renderScoreboard()}
+          <div class="scoreboard-list" id="kk-live-scoreboard-list">
+            ${this._buildGroupScoreboardHTML()}
           </div>
           ${isPenentuan
             ? '<div class="babak-badge penentuan">🔴 BABAK PENENTUAN!</div>'
             : '<div class="babak-badge utama">🔵 BABAK UTAMA</div>'}
+          <div style="margin-top:14px;display:flex;flex-direction:column;gap:8px">
+            <button class="btn-secondary sm" onclick="Pos3View._renderGroupKuisFinalResult(DB.getGroupById('${groupObj.id}'))">📊 Lihat Rekap Skor</button>
+            ${isGuru ? `<button class="btn-danger sm" onclick="Pos3View.resetGroupQuizConfirm('${groupObj.id}')">🔄 Reset Kuis ${groupObj.name}</button>` : ''}
+            <button class="btn-secondary sm" onclick="Pos3View.render()">← Menu Pos 3</button>
+          </div>
         </div>
 
-        <!-- Question Area -->
+        <!-- Right Main Area: Question, Synchronized Options, 15s Timer, & Lock Button -->
         <div class="kuis-question-area">
+          <!-- Top Group Sync Banner -->
+          <div class="group-sync-live-bar" style="border-left:5px solid #FB8C00">
+            <div>
+              <strong>${groupObj.emoji || '👥'} Ruang Kuis Terpusat: ${groupObj.name}</strong>
+              <span style="font-size:0.84rem;color:var(--text-muted);display:block">
+                Setiap pilihan jawaban yang diklik anggota kelompok langsung tersinkronisasi di layar seluruh anggota ${groupObj.name}.
+              </span>
+            </div>
+            <span class="badge-done">🟢 Real-Time Aktif</span>
+          </div>
+
           <div class="kuis-q-header ${isPenentuan ? 'penentuan' : 'utama'}">
-            <div class="kuis-q-num">Soal ${this._kk.currentIdx + 1} dari ${this._kk.questions.length}</div>
+            <div class="kuis-q-num">Soal ${currentIdx + 1} dari ${questions.length}</div>
             <div class="kuis-q-type">${isPenentuan ? '🔴 Babak Penentuan (4 Soal)' : '🔵 Babak Utama (6 Soal)'}</div>
           </div>
 
           <div class="kuis-q-text">${q.pertanyaan}</div>
 
-          <!-- Options Grid (Displayed immediately alongside the question during the 15s timer) -->
+          <!-- Options Grid (Displayed immediately with Question during 15s Timer, Synced Across Group) -->
           <div class="kuis-options-grid" id="kk-options-grid">
-            ${q.pilihan.map((p, i) => `
-              <button class="kuis-option" id="kuis-opt-${i}"
-                onclick="Pos3View.selectAnswer(${i}, ${q.jawaban})">
-                <span class="kuis-opt-letter">${'ABCD'[i]}</span>
-                <span class="kuis-opt-text">${p}</span>
-              </button>`).join('')}
+            ${q.pilihan.map((p, i) => {
+              let btnClass = 'kuis-option';
+              if (isAnswered) {
+                if (i === q.jawaban) btnClass += ' correct';
+                else if (submittedAnswer.selected === i && !submittedAnswer.isCorrect) btnClass += ' wrong';
+              } else if (livePick && livePick.optionIdx === i) {
+                btnClass += ' group-selected';
+              }
+              return `
+                <button class="${btnClass}" id="kuis-opt-${i}"
+                  ${isAnswered ? 'disabled' : ''}
+                  onclick="Pos3View.onClickGroupOption('${groupObj.id}', ${currentIdx}, ${i})">
+                  <span class="kuis-opt-letter">${'ABCD'[i]}</span>
+                  <span class="kuis-opt-text">${p}</span>
+                  <span class="kuis-opt-sync-tag" id="kuis-opt-tag-${i}">
+                    ${!isAnswered && livePick && livePick.optionIdx === i
+                      ? `👥 Dipilih oleh ${livePick.selectedBy}`
+                      : (isAnswered && submittedAnswer.selected === i ? `🔒 Jawaban Kelompok` : '')}
+                  </span>
+                </button>
+              `;
+            }).join('')}
           </div>
 
-          <!-- 15-Second Visual Countdown Box Before Correct Answer Appears -->
-          <div id="kk-delay-box" class="kk-delay-countdown-box">
-            <div class="kk-delay-ring-wrap">
-              <svg class="ta-timer-ring" viewBox="0 0 100 100">
-                <circle cx="50" cy="50" r="44" class="ta-ring-bg"/>
-                <circle cx="50" cy="50" r="44" class="ta-ring-progress" id="kk-delay-ring"
-                  stroke-dasharray="${circumference}" stroke-dashoffset="0" style="stroke:#F9A825"/>
-              </svg>
-              <div class="ta-timer-center" id="kk-delay-num">15</div>
+          <!-- Live Group Selection & Lock Action Bar (When not yet submitted) -->
+          ${!isAnswered ? `
+            <div class="group-lock-answer-bar" id="group-lock-bar">
+              <div id="group-live-pick-status">
+                ${livePick && livePick.optionIdx !== undefined
+                  ? `👥 Pilihan <strong>${groupObj.name}</strong> saat ini: <strong style="color:#1565C0">Pilihan ${'ABCD'[livePick.optionIdx]}</strong> (dipilih oleh <strong>${livePick.selectedBy}</strong>)`
+                  : `💡 Klik salah satu opsi (A, B, C, atau D) untuk berdiskusi dan menyamakan pilihan kelompokmu!`}
+              </div>
+              <button class="btn-primary lg" id="btn-lock-group-ans"
+                onclick="Pos3View.submitGroupAnswerNow('${groupObj.id}', ${currentIdx})">
+                🔒 Kunci & Kirim Jawaban Kelompok
+              </button>
             </div>
-            <div class="kk-delay-info">
-              <h4>⏳ Waktu Diskusi & Menjawab Kelompok (15 Detik)</h4>
-              <p>Pilih jawaban A, B, C, atau D! Kunci jawaban yang benar akan muncul otomatis dalam <strong id="kk-delay-text">15</strong> detik...</p>
-              <div class="kk-delay-bar-track">
-                <div class="kk-delay-bar-fill" id="kk-delay-bar" style="width:100%"></div>
+
+            <!-- 15-Second Visual Countdown Box -->
+            <div id="kk-delay-box" class="kk-delay-countdown-box">
+              <div class="kk-delay-ring-wrap">
+                <svg class="ta-timer-ring" viewBox="0 0 100 100">
+                  <circle cx="50" cy="50" r="44" class="ta-ring-bg"/>
+                  <circle cx="50" cy="50" r="44" class="ta-ring-progress" id="kk-delay-ring"
+                    stroke-dasharray="${circumference}" stroke-dashoffset="0" style="stroke:#F9A825"/>
+                </svg>
+                <div class="ta-timer-center" id="kk-delay-num">15</div>
+              </div>
+              <div class="kk-delay-info">
+                <h4>⏳ Waktu Diskusi & Menjawab Kelompok (15 Detik)</h4>
+                <p>Diskusikan bersama anggota <strong>${groupObj.name}</strong>! Waktu tersisa <strong id="kk-delay-text">15</strong> detik sebelum jawaban dikunci otomatis...</p>
+                <div class="kk-delay-bar-track">
+                  <div class="kk-delay-bar-fill" id="kk-delay-bar" style="width:100%"></div>
+                </div>
               </div>
             </div>
-          </div>
-
-          <div id="kuis-answer-reveal" style="display:none" class="kuis-answer-reveal"></div>
-
-          <!-- Kelompok Scoring Buttons -->
-          <div id="kuis-scoring-area" style="display:none" class="kuis-scoring-area">
-            <p class="scoring-prompt">🏆 Berikan poin kepada kelompok yang menjawab benar (+${settings.pointsBenar} poin) atau jawaban salah (0 poin):</p>
-            <div class="scoring-kelompok-grid">
-              ${this._kk.kelompok.map(k => `
-                <button class="btn-score-kelompok" onclick="Pos3View.addScore('${k.replace(/'/g, "\\'")}', ${settings.pointsBenar})">
-                  👥 ${k} <span>+${settings.pointsBenar} Poin</span>
-                </button>`).join('')}
-              <button class="btn-score-none" onclick="Pos3View.noWinner()">❌ Jawaban Salah / Tidak Ada (0 Poin)</button>
+          ` : `
+            <!-- Answer Reveal Box (Shown after Group Submits or 15s Timer Ends) -->
+            <div id="kuis-answer-reveal" class="kuis-answer-reveal" style="display:block">
+              <div class="answer-reveal-inner ${submittedAnswer.isCorrect ? 'correct' : 'reveal-only'}">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+                  <div>
+                    <div style="font-size:0.84rem;font-weight:800;margin-bottom:4px">
+                      ${submittedAnswer.isCorrect
+                        ? `🎉 JAWABAN ${groupObj.name.toUpperCase()} BENAR! (+${submittedAnswer.points} Poin) • Dikirim oleh ${submittedAnswer.submittedBy}`
+                        : `❌ JAWABAN ${groupObj.name.toUpperCase()} BELUM TEPAT (0 Poin) • Dikirim oleh ${submittedAnswer.submittedBy}`}
+                    </div>
+                    <strong>✅ Kunci Jawaban: ${'ABCD'[q.jawaban]}. ${q.pilihan[q.jawaban]}</strong>
+                  </div>
+                  <div style="display:flex;gap:8px">
+                    <button class="btn-secondary sm" onclick="Pos3View.prevKuisQ('${groupObj.id}')" ${currentIdx === 0 ? 'disabled' : ''}>← Jawaban Sebelumnya</button>
+                    <button class="btn-primary sm" onclick="Pos3View.nextKuisQ('${groupObj.id}')">
+                      ${isLast ? '🏆 Lihat Hasil Akhir →' : 'Jawaban Setelahnya →'}
+                    </button>
+                  </div>
+                </div>
+                ${q.penjelasan ? `<p style="margin-top:8px">${q.penjelasan}</p>` : ''}
+              </div>
             </div>
-          </div>
+          `}
 
-          <!-- Navigation Buttons: Previous & Next Question/Answer -->
+          <!-- Bottom Navigation Buttons: Previous & Next Question/Answer -->
           <div class="kuis-nav-area">
-            <button class="btn-secondary" onclick="Pos3View.prevKuisQ()" ${this._kk.currentIdx === 0 ? 'disabled' : ''}>
+            <button class="btn-secondary" onclick="Pos3View.prevKuisQ('${groupObj.id}')" ${currentIdx === 0 ? 'disabled' : ''}>
               ← Sebelumnya
             </button>
             <div style="display:flex;gap:10px;align-items:center">
-              <button class="btn-secondary sm" id="btn-kk-show-ans" onclick="Pos3View._revealKuisOptions()">
-                💡 Tampilkan Jawaban Sekarang
-              </button>
-              <button class="btn-primary" id="btn-kuis-next" onclick="Pos3View.nextKuisQ()">
-                ${isLast ? '🏆 Lihat Hasil Akhir →' : 'Selanjutnya →'}
+              ${!isAnswered ? `
+                <button class="btn-secondary sm" onclick="Pos3View.submitGroupAnswerNow('${groupObj.id}', ${currentIdx})">
+                  💡 Kunci & Tampilkan Kunci Jawaban
+                </button>
+              ` : ''}
+              <button class="btn-primary" onclick="Pos3View.nextKuisQ('${groupObj.id}')">
+                ${isLast ? '🏆 Lihat Hasil Akhir Kelompok →' : 'Selanjutnya →'}
               </button>
             </div>
           </div>
         </div>
-      </div>`;
+      </div>
+    `;
 
-    this._startKuis15SecCountdown();
+    if (!isAnswered && startTimerIfUnanswered) {
+      this._startGroup15SecCountdown(groupObj.id, currentIdx);
+    }
   },
 
-  _startKuis15SecCountdown() {
+  onClickGroupOption(groupId, qIdx, optionIdx) {
+    const user = Auth.getCurrentUser();
+    if (!user) return;
+    if (typeof SoundManager !== 'undefined') SoundManager.playSFX('click');
+
+    DB.selectPos3GroupOption(groupId, qIdx, optionIdx, user.name);
+    this._updateLiveGroupOptionUI(qIdx, optionIdx, user.name);
+  },
+
+  _updateLiveGroupOptionUI(qIdx, optionIdx, userName) {
+    document.querySelectorAll('#kk-options-grid .kuis-option').forEach((btn, i) => {
+      btn.classList.toggle('group-selected', i === optionIdx);
+      const tag = document.getElementById(`kuis-opt-tag-${i}`);
+      if (tag) {
+        tag.textContent = i === optionIdx ? `👥 Dipilih oleh ${userName}` : '';
+      }
+    });
+
+    const statusEl = document.getElementById('group-live-pick-status');
+    if (statusEl && optionIdx !== undefined && optionIdx >= 0) {
+      statusEl.innerHTML = `👥 Pilihan kelompok saat ini: <strong style="color:#1565C0">Pilihan ${'ABCD'[optionIdx]}</strong> (dipilih oleh <strong>${userName}</strong>)`;
+    }
+  },
+
+  _startGroup15SecCountdown(groupId, qIdx) {
     const total = 15;
     const circumference = 2 * Math.PI * 44;
 
-    this._kk.revealTimer = setInterval(() => {
-      this._kk.revealTimeLeft--;
+    this._kkTimer = setInterval(() => {
+      this._kkTimeLeft--;
 
       const numEl = document.getElementById('kk-delay-num');
       const txtEl = document.getElementById('kk-delay-text');
       const ringEl = document.getElementById('kk-delay-ring');
       const barEl = document.getElementById('kk-delay-bar');
 
-      if (numEl) numEl.textContent = this._kk.revealTimeLeft;
-      if (txtEl) txtEl.textContent = this._kk.revealTimeLeft;
+      if (numEl) numEl.textContent = this._kkTimeLeft;
+      if (txtEl) txtEl.textContent = this._kkTimeLeft;
       if (ringEl) {
-        const offset = circumference * (1 - this._kk.revealTimeLeft / total);
+        const offset = circumference * (1 - this._kkTimeLeft / total);
         ringEl.style.strokeDashoffset = offset;
-        ringEl.style.stroke = this._kk.revealTimeLeft <= 5 ? '#E53935' : '#F9A825';
+        ringEl.style.stroke = this._kkTimeLeft <= 5 ? '#E53935' : '#F9A825';
       }
       if (barEl) {
-        barEl.style.width = `${(this._kk.revealTimeLeft / total) * 100}%`;
+        barEl.style.width = `${(this._kkTimeLeft / total) * 100}%`;
       }
 
-      if (this._kk.revealTimeLeft <= 5 && this._kk.revealTimeLeft > 0) {
+      if (this._kkTimeLeft <= 5 && this._kkTimeLeft > 0) {
         if (typeof SoundManager !== 'undefined') SoundManager.playSFX('tick');
       }
 
-      if (this._kk.revealTimeLeft <= 0) {
-        clearInterval(this._kk.revealTimer);
-        this._kk.revealTimer = null;
-        this._revealKuisOptions();
+      if (this._kkTimeLeft <= 0) {
+        clearInterval(this._kkTimer);
+        this._kkTimer = null;
+        this.submitGroupAnswerNow(groupId, qIdx, true);
       }
     }, 1000);
   },
 
-  _revealKuisOptions() {
-    if (this._kk.revealTimer) {
-      clearInterval(this._kk.revealTimer);
-      this._kk.revealTimer = null;
-    }
-    this._kk.optionsRevealed = true;
-    this._kk.answered = true;
-    if (typeof SoundManager !== 'undefined') SoundManager.playSFX('reveal');
-
-    const q = this._kk.questions[this._kk.currentIdx];
-    if (!q) return;
-
-    const delayBox = document.getElementById('kk-delay-box');
-    if (delayBox) {
-      delayBox.innerHTML = `
-        <div class="kk-options-ready-banner">
-          ⏰ <strong>Waktu 15 Detik Selesai!</strong> Kunci jawaban untuk Soal ${this._kk.currentIdx + 1} ditampilkan di bawah:
-        </div>`;
-    }
-
-    // Highlight the correct option
-    document.querySelectorAll('.kuis-option').forEach((btn, i) => {
-      btn.disabled = true;
-      if (i === q.jawaban) btn.classList.add('correct');
-    });
-
-    // Show Answer & Explanation + Previous/Next Answer Navigation
-    const reveal = document.getElementById('kuis-answer-reveal');
-    if (reveal) {
-      reveal.style.display = 'block';
-      reveal.innerHTML = `
-        <div class="answer-reveal-inner correct">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
-            <strong>✅ Kunci Jawaban Benar: ${'ABCD'[q.jawaban]}. ${q.pilihan[q.jawaban]}</strong>
-            <div style="display:flex;gap:8px">
-              <button class="btn-secondary sm" onclick="Pos3View.prevKuisQ()" ${this._kk.currentIdx === 0 ? 'disabled' : ''}>← Jawaban Sebelumnya</button>
-              <button class="btn-primary sm" onclick="Pos3View.nextKuisQ()">
-                ${this._kk.currentIdx >= this._kk.questions.length - 1 ? '🏆 Hasil Akhir' : 'Jawaban Setelahnya →'}
-              </button>
-            </div>
-          </div>
-          ${q.penjelasan ? `<p style="margin-top:6px">${q.penjelasan}</p>` : ''}
-        </div>`;
-    }
-
-    const scoringArea = document.getElementById('kuis-scoring-area');
-    if (scoringArea) scoringArea.style.display = 'block';
-
-    const showAnsBtn = document.getElementById('btn-kk-show-ans');
-    if (showAnsBtn) showAnsBtn.style.display = 'none';
-  },
-
-  _renderScoreboard() {
-    const sorted = [...this._kk.kelompok].sort((a, b) => (this._kk.scores[b] || 0) - (this._kk.scores[a] || 0));
-    const medals = ['🥇', '🥈', '🥉'];
-    return sorted.map((k, i) => `
-      <div class="score-row-kuis ${i === 0 ? 'leader' : ''}">
-        <span class="score-medal">${medals[i] || `${i + 1}.`}</span>
-        <span class="score-name">${k}</span>
-        <span class="score-poin">${this._kk.scores[k] || 0} poin</span>
-      </div>`).join('');
-  },
-
-  selectAnswer(idx, correctIdx) {
-    if (this._kk.answered) return;
-    this._kk.answered = true;
-    if (this._kk.revealTimer) {
-      clearInterval(this._kk.revealTimer);
-      this._kk.revealTimer = null;
-    }
-
-    const isCorrect = idx === correctIdx;
-    const q = this._kk.questions[this._kk.currentIdx];
-
-    const delayBox = document.getElementById('kk-delay-box');
-    if (delayBox) {
-      delayBox.innerHTML = `
-        <div class="kk-options-ready-banner">
-          ${isCorrect ? '✅ <strong>Jawaban Terpilih: BENAR!</strong>' : '❌ <strong>Jawaban Terpilih: SALAH!</strong>'}
-        </div>`;
-    }
-
-    document.querySelectorAll('.kuis-option').forEach((btn, i) => {
-      btn.disabled = true;
-      if (i === correctIdx) btn.classList.add('correct');
-      else if (i === idx && !isCorrect) btn.classList.add('wrong');
-    });
-
-    const reveal = document.getElementById('kuis-answer-reveal');
-    reveal.style.display = 'block';
-    reveal.innerHTML = `
-      <div class="answer-reveal-inner ${isCorrect ? 'correct' : 'reveal-only'}">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
-          <strong>${isCorrect ? '✅ Jawaban BENAR (+10 Poin)! Kunci:' : '❌ Jawaban kurang tepat (0 Poin). Kunci Jawaban:'} ${'ABCD'[correctIdx]}. ${q.pilihan[correctIdx]}</strong>
-          <div style="display:flex;gap:8px">
-            <button class="btn-secondary sm" onclick="Pos3View.prevKuisQ()" ${this._kk.currentIdx === 0 ? 'disabled' : ''}>← Jawaban Sebelumnya</button>
-            <button class="btn-primary sm" onclick="Pos3View.nextKuisQ()">
-              ${this._kk.currentIdx >= this._kk.questions.length - 1 ? '🏆 Hasil Akhir' : 'Jawaban Setelahnya →'}
-            </button>
-          </div>
-        </div>
-        ${q.penjelasan ? `<p style="margin-top:6px">${q.penjelasan}</p>` : ''}
-      </div>`;
-
-    if (isCorrect) App.showConfetti(30);
-
-    document.getElementById('kuis-scoring-area').style.display = 'block';
-    const showAnsBtn = document.getElementById('btn-kk-show-ans');
-    if (showAnsBtn) showAnsBtn.style.display = 'none';
-
-    App.showToast(isCorrect ? '✅ Jawaban BENAR!' : '❌ Jawaban Salah (0 Poin)', isCorrect ? 'success' : 'error');
-  },
-
-  addScore(kelompok, points) {
-    this._kk.scores[kelompok] = (this._kk.scores[kelompok] || 0) + points;
-    document.getElementById('kuis-scoring-area').innerHTML =
-      `<div class="score-added">✅ +${points} poin ditambahkan untuk <strong>${kelompok}</strong>!</div>`;
-
-    document.querySelector('.scoreboard-list').innerHTML = this._renderScoreboard();
-    App.showConfetti(20);
-    App.showToast(`+${points} poin untuk ${kelompok}!`, 'success');
-  },
-
-  noWinner() {
-    document.getElementById('kuis-scoring-area').innerHTML =
-      '<div class="score-added">⏭️ Jawaban salah — 0 poin diberikan pada soal ini.</div>';
-  },
-
-  nextKuisQ() {
+  submitGroupAnswerNow(groupId, qIdx, fromTimer = false) {
     this._clearAllTimers();
-    if (this._kk.currentIdx >= this._kk.questions.length - 1) {
-      this._renderKuisResult();
+    const user = Auth.getCurrentUser();
+    const grp = DB.getGroupById(groupId);
+    if (!grp) return;
+
+    const gState = DB.getPos3ForGroup(groupId);
+    if (gState.answers?.[qIdx]) {
+      this._renderGroupKuisQuestion(grp, false);
       return;
     }
-    this._kk.currentIdx++;
-    this._kk.answered = false;
-    this._renderKuisQuestion();
-  },
 
-  prevKuisQ() {
-    this._clearAllTimers();
-    if (this._kk.currentIdx > 0) {
-      this._kk.currentIdx--;
-      this._kk.answered = false;
-      this._renderKuisQuestion();
+    const submitterLabel = fromTimer ? 'Timer 15 Detik Habis' : (user?.name || 'Anggota Kelompok');
+    const updatedState = DB.submitPos3GroupAnswer(groupId, qIdx, submitterLabel);
+    const ansRec = updatedState?.answers?.[qIdx];
+    const q = DB.getKuisKejutan()[qIdx];
+
+    this._renderGroupKuisQuestion(grp, false);
+
+    if (q && ansRec) {
+      App.showPointFeedback({
+        groupName: `${grp.emoji || '👥'} ${grp.name}`,
+        pointsEarned: ansRec.points || 0,
+        totalScore: updatedState.totalScore || 0,
+        isCorrect: !!ansRec.isCorrect,
+        title: ansRec.isCorrect ? 'Jawaban Kelompok BENAR!' : 'Jawaban Kelompok Belum Tepat',
+        subtitle: `Soal #${qIdx + 1} • ${fromTimer ? 'Waktu 15 Detik Selesai' : 'Dikirim oleh ' + submitterLabel}`,
+        detail: `Kunci Jawaban: ${'ABCD'[q.jawaban]}. ${q.pilihan[q.jawaban]}${q.penjelasan ? ' — ' + q.penjelasan : ''}`
+      });
     }
   },
 
-  _renderKuisResult() {
+  nextKuisQ(groupId) {
+    this._clearAllTimers();
+    const grp = DB.getGroupById(groupId);
+    if (!grp) return;
+    const questions = DB.getKuisKejutan();
+    const gState = DB.getPos3ForGroup(groupId);
+    const curr = gState.currentIdx || 0;
+
+    if (curr >= questions.length - 1) {
+      this._renderGroupKuisFinalResult(grp);
+      return;
+    }
+
+    DB.navigatePos3GroupQuestion(groupId, curr + 1);
+    this._renderGroupKuisQuestion(grp, true);
+  },
+
+  prevKuisQ(groupId) {
+    this._clearAllTimers();
+    const grp = DB.getGroupById(groupId);
+    if (!grp) return;
+    const gState = DB.getPos3ForGroup(groupId);
+    const curr = gState.currentIdx || 0;
+
+    if (curr > 0) {
+      DB.navigatePos3GroupQuestion(groupId, curr - 1);
+      this._renderGroupKuisQuestion(grp, true);
+    }
+  },
+
+  resetGroupQuizConfirm(groupId) {
+    const grp = DB.getGroupById(groupId);
+    if (!grp) return;
+    App.showModal(`
+      <div class="modal-confirm">
+        <div class="confirm-icon">🔄</div>
+        <h3>Reset Kuis Kelompok ${grp.name}?</h3>
+        <p>Seluruh jawaban dan skor Kuis Kelompok untuk <strong>${grp.name}</strong> akan direset kembali ke Soal 1.</p>
+        <div class="confirm-actions">
+          <button class="btn-secondary" onclick="App.closeModal()">Batal</button>
+          <button class="btn-danger" onclick="Pos3View.doResetGroupQuiz('${grp.id}')">Ya, Reset</button>
+        </div>
+      </div>
+    `);
+  },
+
+  doResetGroupQuiz(groupId) {
+    DB.resetPos3Group(groupId);
+    App.closeModal();
+    const grp = DB.getGroupById(groupId);
+    if (grp) this._renderGroupKuisQuestion(grp, true);
+    App.showToast('Kuis kelompok berhasil direset!', 'info');
+  },
+
+  _renderGroupKuisFinalResult(groupObj) {
     this._clearAllTimers();
     const area = document.getElementById('pos3-kuis-area');
-    const sorted = [...this._kk.kelompok].sort((a, b) => (this._kk.scores[b] || 0) - (this._kk.scores[a] || 0));
-    const medals = ['🥇', '🥈', '🥉'];
-    const winner = sorted[0];
+    if (!area || !groupObj) return;
 
-    App.showConfetti(100);
+    const questions = DB.getKuisKejutan();
+    const gState = DB.getPos3ForGroup(groupObj.id);
+    const totalScore = gState.totalScore || 0;
+    const maxScore = questions.length * (DB.getSettings().pointsBenar || 10);
+    const correctCount = Object.values(gState.answers || {}).filter(a => a.isCorrect).length;
+
+    App.showConfetti(90);
 
     area.innerHTML = `
       <div class="kuis-result-page">
         <div class="kuis-result-header">
           <div class="kuis-result-trophy">🏆</div>
-          <h1>Kompetisi Kuis Kelompok Selesai!</h1>
-          <p>Kelompok Terbaik: <strong>${winner}</strong> (${this._kk.scores[winner] || 0} Poin) 🎉</p>
+          <h1>Rekap Skor Kuis Kelompok — ${groupObj.emoji || '👥'} ${groupObj.name}</h1>
+          <p>Total Perolehan Skor Kelompok: <strong>${totalScore} / ${maxScore} Poin</strong> (${correctCount} dari ${questions.length} Soal Benar) 🎉</p>
         </div>
+
         <div class="kuis-final-scoreboard">
-          <h3>📊 Papan Skor Akhir Kelompok</h3>
-          ${sorted.map((k, i) => `
-            <div class="final-score-row ${i === 0 ? 'winner' : ''}">
-              <span class="final-medal">${medals[i] || `${i + 1}.`}</span>
-              <span class="final-name">${k}</span>
-              <div class="final-bar-wrap">
-                <div class="final-bar" style="width:${this._kk.scores[sorted[0]] ? (this._kk.scores[k] / this._kk.scores[sorted[0]]) * 100 : 0}%"></div>
-              </div>
-              <span class="final-score">${this._kk.scores[k] || 0} poin</span>
-            </div>`).join('')}
+          <h3>📋 Rincian Jawaban Kelompok (${groupObj.name})</h3>
+          <div style="display:flex;flex-direction:column;gap:10px;margin-top:12px">
+            ${questions.map((q, idx) => {
+              const ans = gState.answers?.[idx];
+              return `
+                <div class="ta-answer-row ${ans ? (ans.isCorrect ? 'correct' : 'wrong') : ''}">
+                  <span class="ta-ans-num">${idx + 1}</span>
+                  <div class="ta-ans-q">
+                    <strong>${q.pertanyaan}</strong>
+                    <small style="display:block;color:var(--text-muted)">
+                      Jawaban Kelompok: ${ans && ans.selected >= 0 ? `${'ABCD'[ans.selected]}. ${q.pilihan[ans.selected]}` : '(Belum dijawab)'}
+                      • Kunci: <strong>${'ABCD'[q.jawaban]}. ${q.pilihan[q.jawaban]}</strong>
+                    </small>
+                  </div>
+                  <div class="ta-ans-result">
+                    ${ans ? (ans.isCorrect ? `✅ +${ans.points} Poin` : '❌ 0 Poin') : '⏳ Belum'}
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
         </div>
+
         <div class="kuis-result-actions">
-          <button class="btn-secondary" onclick="Pos3View.startKuisSetup()">🔄 Main Lagi</button>
+          <button class="btn-secondary" onclick="Pos3View._renderGroupKuisQuestion(DB.getGroupById('${groupObj.id}'), false)">← Kembali ke Soal Kelompok</button>
           <button class="btn-primary" onclick="Pos3View.render()">🏠 Menu Utama Pos 3</button>
         </div>
-      </div>`;
-
-    const user = Auth.getCurrentUser();
-    if (user?.role === 'murid') {
-      const topScore = this._kk.scores[winner] || 0;
-      DB.saveScore(user.id, 'pos3', { kuis: topScore });
-      MuridView.awardBadge(user.id, 'pos3_done');
-    }
+      </div>
+    `;
   },
 
   // ══════════════════════════════════════════════════════════
@@ -534,6 +698,7 @@ const Pos3View = {
   // ══════════════════════════════════════════════════════════
   startTantangan() {
     this._clearAllTimers();
+    this._mode = 'tantangan';
     document.getElementById('pos3-menu').style.display = 'none';
     const area = document.getElementById('pos3-tantangan-area');
     area.style.display = 'block';
@@ -541,7 +706,6 @@ const Pos3View = {
     const questions = DB.getTantanganAkhir();
     const pgQ = questions.filter(q => (q.type || 'pg') === 'pg');
     const esaiQ = questions.filter(q => q.type === 'esai');
-    // Order: PG questions first, followed by Essay questions
     const orderedQuestions = [...pgQ, ...esaiQ];
 
     this._ta = {
@@ -688,7 +852,6 @@ const Pos3View = {
         clearInterval(this._ta.timer);
         if (!this._ta.answered) {
           if (isEsai) {
-            // Auto-submit whatever essay text the student has written
             this.submitEsaiAnswer(true);
           } else {
             this._ta.userAnswers.push({ qId: q.id, type: 'pg', selected: -1, correct: q.jawaban, isCorrect: false });
@@ -749,7 +912,6 @@ const Pos3View = {
     const btn = document.getElementById('btn-submit-esai');
     if (btn) btn.disabled = true;
 
-    // Evaluate essay response based on length & keyword matches
     let isCorrect = false;
     if (text.length >= 15) {
       const lower = text.toLowerCase();

@@ -142,6 +142,12 @@ const SoundManager = {
     document.addEventListener('click', (e) => {
       this._ensureContext();
 
+      // Auto-close expanded audio dropdown panel when clicking outside the audio widget
+      if (this._panelExpanded && !e.target.closest('#audio-control-widget')) {
+        this._panelExpanded = false;
+        this._updateFloatingUI();
+      }
+
       // Do not play normal click if inside audio panel toggle that plays its own sound
       const interactive = e.target.closest(
         'button, .role-pill, .hint-card, .filter-pill, .pos-card, .topic-card, .turn-order-item, .pos4-dot, .murid-select-item'
@@ -422,34 +428,46 @@ const SoundManager = {
     const activeTrack = this.tracks[activeTrackKey] || this.tracks.ceria;
 
     widget.innerHTML = `
-      <div class="audio-pill-bar">
-        <button class="audio-btn-pill ${this._bgmEnabled ? 'on' : 'off'}"
+      <div class="audio-pill-bar compact" title="Pengaturan Musik & Suara Tombol">
+        <button class="audio-btn-icon ${this._bgmEnabled ? 'on' : 'off'}"
           onclick="SoundManager.toggleBGM()"
-          title="Musik Latar Belakang ON/OFF">
-          <span>${this._bgmEnabled ? '🎵' : '🔇'}</span>
-          <span>Musik: <strong>${this._bgmEnabled ? 'ON' : 'OFF'}</strong></span>
+          title="Musik Latar: ${this._bgmEnabled ? 'ON (Klik untuk Matikan)' : 'OFF (Klik untuk Nyalakan)'}">
+          ${this._bgmEnabled ? '🎵' : '🔇'}
         </button>
 
-        <button class="audio-btn-pill ${this._sfxEnabled ? 'on' : 'off'}"
+        <button class="audio-btn-icon ${this._sfxEnabled ? 'on' : 'off'}"
           onclick="SoundManager.toggleSFX()"
-          title="Efek Suara Tombol ON/OFF">
-          <span>${this._sfxEnabled ? '🔊' : '🔈'}</span>
-          <span>Suara Tombol: <strong>${this._sfxEnabled ? 'ON' : 'OFF'}</strong></span>
+          title="Suara Tombol: ${this._sfxEnabled ? 'ON (Klik untuk Matikan)' : 'OFF (Klik untuk Nyalakan)'}">
+          ${this._sfxEnabled ? '🔊' : '🔈'}
         </button>
 
         <button class="audio-btn-expand ${this._panelExpanded ? 'active' : ''}"
           onclick="SoundManager.togglePanel()"
-          title="Pilih Musik Latar & Volume">
-          🎼 ${this._panelExpanded ? '▲' : '▼'}
+          title="Buka / Tutup Menu Musik & Volume">
+          ${this._panelExpanded ? '✕' : '🎼'}
         </button>
       </div>
 
       ${this._panelExpanded ? `
         <div class="audio-dropdown-panel">
           <div class="audio-panel-title">
-            <span>🎼 Pilih Tema Musik Latar</span>
-            <small>${activeTrack.name}</small>
+            <span>🎼 Pengaturan Audio</span>
+            <button class="audio-panel-close" onclick="SoundManager.togglePanel()" title="Tutup Panel">✕</button>
           </div>
+
+          <!-- Quick Toggles Inside Panel -->
+          <div class="audio-panel-toggles">
+            <button class="audio-toggle-card ${this._bgmEnabled ? 'on' : 'off'}" onclick="SoundManager.toggleBGM()">
+              <span>${this._bgmEnabled ? '🎵' : '🔇'} Musik Latar</span>
+              <strong>${this._bgmEnabled ? 'ON' : 'OFF'}</strong>
+            </button>
+            <button class="audio-toggle-card ${this._sfxEnabled ? 'on' : 'off'}" onclick="SoundManager.toggleSFX()">
+              <span>${this._sfxEnabled ? '🔊' : '🔈'} Suara Tombol</span>
+              <strong>${this._sfxEnabled ? 'ON' : 'OFF'}</strong>
+            </button>
+          </div>
+
+          <div class="audio-panel-sublabel">Pilih Tema Musik (${activeTrack.name}):</div>
 
           <div class="audio-track-list">
             <button class="audio-track-item ${this._bgmMode === 'auto' ? 'active' : ''}"

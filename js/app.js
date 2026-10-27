@@ -188,6 +188,41 @@ const App = {
     }
   },
 
+  // ── Automatic Group Point Feedback Popup ──────────────────
+  showPointFeedback({ groupName, pointsEarned, totalScore, isCorrect = true, title = 'Jawaban Terkirim!', subtitle = '', detail = '' }) {
+    const existing = document.getElementById('point-feedback-popup');
+    if (existing) existing.remove();
+
+    if (typeof SoundManager !== 'undefined') {
+      SoundManager.playSFX(pointsEarned > 0 ? 'fanfare' : 'wrong');
+    }
+    if (pointsEarned > 0) {
+      this.showConfetti(45);
+    }
+
+    const popup = document.createElement('div');
+    popup.id = 'point-feedback-popup';
+    popup.className = `point-feedback-overlay visible`;
+    popup.innerHTML = `
+      <div class="point-feedback-card ${pointsEarned > 0 ? 'earned' : 'zero'}">
+        <div class="pf-badge-top">🏅 PAPAN SKOR KELOMPOK OTOMATIS</div>
+        <div class="pf-emoji">${pointsEarned > 0 ? '🎉' : '💪'}</div>
+        <h2 class="pf-title">${title}</h2>
+        <div class="pf-group-name">👥 ${groupName || 'Kelompok Kamu'}</div>
+        <div class="pf-points-box">
+          <div class="pf-points-delta">${pointsEarned > 0 ? `+${pointsEarned}` : '+0'} Poin</div>
+          <div class="pf-points-total">Total Skor Kelompok: <strong>${totalScore} Poin ⭐</strong></div>
+        </div>
+        ${subtitle ? `<p class="pf-subtitle">${subtitle}</p>` : ''}
+        ${detail ? `<div class="pf-detail">${detail}</div>` : ''}
+        <button class="btn-primary" onclick="document.getElementById('point-feedback-popup')?.remove()">
+          👍 Lanjutkan!
+        </button>
+      </div>
+    `;
+    document.body.appendChild(popup);
+  },
+
   // ── Utilities ─────────────────────────────────────────────
   formatDate(iso) {
     if (!iso) return '-';
@@ -229,9 +264,10 @@ const App = {
 
     const guruNavs = [
       { tab: 'overview', icon: '🏠', label: 'Beranda' },
+      { tab: 'kelompok', icon: '👥', label: 'Manajemen Kelompok' },
       { tab: 'kelas', icon: '🏫', label: 'Kelola Kelas' },
       { tab: 'materi', icon: '📤', label: 'Materi Pos 1 (Video/PDF)' },
-      { tab: 'kasus', icon: '🎡', label: 'Kasus Pos 2 (Teks/Gambar)' },
+      { tab: 'kasus', icon: '🎡', label: 'Undian & Kasus Pos 2' },
       { tab: 'kuis', icon: '🏆', label: 'Kuis Pos 3 (PG & Esai)' },
       { tab: 'hasil', icon: '📊', label: 'Hasil Murid' },
     ];
@@ -343,19 +379,31 @@ const LoginView = {
               </button>
             </form>
             <div class="login-hint-wrap" id="login-hints">
-              <p class="login-hint-title">💡 Akun Demo:</p>
+              <p class="login-hint-title">💡 Akun Demo (Buka beberapa Tab untuk uji Real-Time Kelompok):</p>
               <div class="login-hints-grid" id="hints-grid">
-                <div class="hint-card" onclick="LoginView.fillCreds('admin','admin123')">
-                  <span class="hint-icon">🔑</span>
-                  <div><strong>Admin</strong><br><small>admin / admin123</small></div>
-                </div>
                 <div class="hint-card" onclick="LoginView.fillCreds('guru1','guru123')">
                   <span class="hint-icon">👩‍🏫</span>
                   <div><strong>Guru</strong><br><small>guru1 / guru123</small></div>
                 </div>
                 <div class="hint-card" onclick="LoginView.fillCreds('murid1','murid123')">
                   <span class="hint-icon">🌱</span>
-                  <div><strong>Murid</strong><br><small>murid1 / murid123</small></div>
+                  <div><strong>Murid 1 (Kel. 1)</strong><br><small>murid1 / murid123</small></div>
+                </div>
+                <div class="hint-card" onclick="LoginView.fillCreds('murid2','murid456')">
+                  <span class="hint-icon">🌸</span>
+                  <div><strong>Murid 2 (Kel. 1)</strong><br><small>murid2 / murid456</small></div>
+                </div>
+                <div class="hint-card" onclick="LoginView.fillCreds('murid3','murid789')">
+                  <span class="hint-icon">⭐</span>
+                  <div><strong>Murid 3 (Kel. 2)</strong><br><small>murid3 / murid789</small></div>
+                </div>
+                <div class="hint-card" onclick="LoginView.fillCreds('murid5','murid123')">
+                  <span class="hint-icon">🦁</span>
+                  <div><strong>Murid 5 (Kel. 3)</strong><br><small>murid5 / murid123</small></div>
+                </div>
+                <div class="hint-card" onclick="LoginView.fillCreds('admin','admin123')">
+                  <span class="hint-icon">🔑</span>
+                  <div><strong>Admin</strong><br><small>admin / admin123</small></div>
                 </div>
               </div>
             </div>
