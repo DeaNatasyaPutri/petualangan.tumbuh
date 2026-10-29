@@ -370,12 +370,6 @@ const LoginView = {
           </div>
           <div class="login-form-wrap">
             <h2 class="login-form-title">Masuk ke Platform</h2>
-            <div class="login-role-pills">
-              <button class="role-pill active" data-role="all" onclick="LoginView.filterRole(this,'all')">Semua</button>
-              <button class="role-pill" data-role="admin" onclick="LoginView.filterRole(this,'admin')">🔑 Admin</button>
-              <button class="role-pill" data-role="guru" onclick="LoginView.filterRole(this,'guru')">👩‍🏫 Guru</button>
-              <button class="role-pill" data-role="murid" onclick="LoginView.filterRole(this,'murid')">🌱 Murid</button>
-            </div>
             <form class="login-form" onsubmit="LoginView.handleLogin(event)">
               <div class="form-group">
                 <label class="form-label">👤 Nama Pengguna</label>
@@ -392,35 +386,6 @@ const LoginView = {
                 <span>🚀 Masuk Sekarang!</span>
               </button>
             </form>
-            <div class="login-hint-wrap" id="login-hints">
-              <p class="login-hint-title">💡 Akun Demo (Buka beberapa Tab untuk uji Real-Time Kelompok):</p>
-              <div class="login-hints-grid" id="hints-grid">
-                <div class="hint-card" onclick="LoginView.fillCreds('Dea Natasya','Deanatasya')">
-                  <span class="hint-icon">👩‍🏫</span>
-                  <div><strong>Guru (Dea Natasya)</strong><br><small>Dea Natasya / Deanatasya</small></div>
-                </div>
-                <div class="hint-card" onclick="LoginView.fillCreds('Adilla Nisa Ardani','murid123')">
-                  <span class="hint-icon">🌸</span>
-                  <div><strong>Murid (Kel. 1)</strong><br><small>Adilla Nisa Ardani / murid123</small></div>
-                </div>
-                <div class="hint-card" onclick="LoginView.fillCreds('Fathimah Azzahra','murid123')">
-                  <span class="hint-icon">🌺</span>
-                  <div><strong>Murid (Kel. 1)</strong><br><small>Fathimah Azzahra / murid123</small></div>
-                </div>
-                <div class="hint-card" onclick="LoginView.fillCreds('Anas Nurrayyan Alfaqih','murid123')">
-                  <span class="hint-icon">🌳</span>
-                  <div><strong>Murid (Kel. 2)</strong><br><small>Anas Nurrayyan Alfaqih / murid123</small></div>
-                </div>
-                <div class="hint-card" onclick="LoginView.fillCreds('Annisa Aulia Rahmi Ariyadi','murid123')">
-                  <span class="hint-icon">🌻</span>
-                  <div><strong>Murid (Kel. 3)</strong><br><small>Annisa Aulia Rahmi Ariyadi / murid123</small></div>
-                </div>
-                <div class="hint-card" onclick="LoginView.fillCreds('admin','admin123')">
-                  <span class="hint-icon">🔑</span>
-                  <div><strong>Admin</strong><br><small>admin / admin123</small></div>
-                </div>
-              </div>
-            </div>
           </div>
         </div>
       </div>`;
