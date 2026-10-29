@@ -7,12 +7,49 @@
   <meta name="description" content="Platform media pembelajaran interaktif berbasis web untuk murid Kelas V SD. Jelajah Pengetahuan, Pecahkan Tantangan, Kuis Kejutan, dan Jejak Tumbuhku!">
   <meta name="keywords" content="pembelajaran, IPA, kelas 5, SD, ekosistem, interaktif, edu">
   <meta name="author" content="Petualangan TUMBUH">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+
+  <!-- Auto-switch from file:// to local HTTP server so YouTube embeds & real-time sync operate with legitimate HTTP origin -->
+  <script>
+    (function() {
+      if (typeof window !== 'undefined' && window.location) {
+        if (window.location.protocol.startsWith('http')) {
+          try {
+            var sp = new URLSearchParams(window.location.search);
+            var handoff = sp.get('session_handoff');
+            if (handoff) {
+              sessionStorage.setItem('tumbuh_session', decodeURIComponent(handoff));
+              sp.delete('session_handoff');
+              var cleanSearch = sp.toString() ? ('?' + sp.toString()) : '';
+              window.history.replaceState({}, document.title, window.location.pathname + cleanSearch + window.location.hash);
+            }
+          } catch(e) {}
+        } else if (window.location.protocol === 'file:') {
+          try {
+            fetch('http://127.0.0.1:8765/api/sync?since=0', { mode: 'cors' })
+              .then(function(res) {
+                if (res.ok) {
+                  var sess = sessionStorage.getItem('tumbuh_session');
+                  var target = 'http://127.0.0.1:8765/index.html';
+                  var parts = [];
+                  if (sess) parts.push('session_handoff=' + encodeURIComponent(sess));
+                  if (parts.length > 0) target += '?' + parts.join('&');
+                  target += (window.location.hash || '');
+                  window.location.replace(target);
+                }
+              })
+              .catch(function() {});
+          } catch(e) {}
+        }
+      }
+    })();
+  </script>
 
   <!-- Favicon -->
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌱</text></svg>">
 
   <!-- CSS -->
-  <link rel="stylesheet" href="css/style.css?v=20261029_6">
+  <link rel="stylesheet" href="css/style.css?v=20261030_15">
 </head>
 <body>
 
@@ -59,18 +96,18 @@
   <!-- ════════════════════════════════════════════════════ -->
   <!-- JAVASCRIPT — Load Order Matters!                    -->
   <!-- ════════════════════════════════════════════════════ -->
-  <script src="js/restored_data.js?v=20261030_1"></script>
-  <script src="js/data.js?v=20261030_1"></script>
-  <script src="js/auth.js?v=20261030_1"></script>
-  <script src="js/sound.js?v=20261030_1"></script>
-  <script src="js/app.js?v=20261030_1"></script>
-  <script src="js/admin.js?v=20261030_1"></script>
-  <script src="js/guru.js?v=20261030_1"></script>
-  <script src="js/murid.js?v=20261030_1"></script>
-  <script src="js/pos1.js?v=20261030_1"></script>
-  <script src="js/pos2.js?v=20261030_1"></script>
-  <script src="js/pos3.js?v=20261030_1"></script>
-  <script src="js/pos4.js?v=20261030_1"></script>
+  <script src="js/restored_data.js?v=20261030_15"></script>
+  <script src="js/data.js?v=20261030_15"></script>
+  <script src="js/auth.js?v=20261030_15"></script>
+  <script src="js/sound.js?v=20261030_15"></script>
+  <script src="js/app.js?v=20261030_15"></script>
+  <script src="js/admin.js?v=20261030_15"></script>
+  <script src="js/guru.js?v=20261030_15"></script>
+  <script src="js/murid.js?v=20261030_15"></script>
+  <script src="js/pos1.js?v=20261030_15"></script>
+  <script src="js/pos2.js?v=20261030_15"></script>
+  <script src="js/pos3.js?v=20261030_15"></script>
+  <script src="js/pos4.js?v=20261030_15"></script>
 
 </body>
 </html>

@@ -8,7 +8,8 @@ const MuridView = {
   render() {
     if (this._unsubRT) { this._unsubRT(); this._unsubRT = null; }
     this._unsubRT = RealtimeSync.subscribe((evt) => {
-      if (App.currentView === 'murid' && ['GROUPS_UPDATED', 'POS2_LKK_SUBMITTED', 'POS3_ANSWER_SUBMITTED'].includes(evt.type)) {
+      const type = evt.type || evt.event;
+      if (App.currentView === 'murid' && ['GROUPS_UPDATED', 'POS2_LKK_SUBMITTED', 'POS3_ANSWER_SUBMITTED', 'TOPICS_UPDATED', 'DATA_UPDATED'].includes(type)) {
         this.render();
       }
     });

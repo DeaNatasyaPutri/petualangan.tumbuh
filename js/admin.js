@@ -529,7 +529,7 @@ const AdminView = {
     if (!title || !video) { App.showToast('Judul dan URL Video wajib diisi!', 'error'); return; }
     const colors = ['#2E7D32','#E65100','#0277BD','#6A1B9A','#C62828','#00838F'];
     const color = colors[Math.floor(Math.random()*colors.length)];
-    DB.addTopic({ title, description: desc, videoUrl: video, emoji, level, color, bgGradient: `linear-gradient(135deg,${color},#1a1a2e)`, tags: [title,'IPA','Kelas 5'] });
+    DB.addTopic({ title, description: desc, videoUrl: DB.toEmbedUrl(video), emoji, level, color, bgGradient: `linear-gradient(135deg,${color},#1a1a2e)`, tags: [title,'IPA','Kelas 5'] });
     App.closeModal();
     App.showToast('Topik berhasil ditambahkan!', 'success');
     this.render('content');

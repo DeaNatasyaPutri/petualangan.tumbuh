@@ -19,7 +19,7 @@ const Auth = {
       if (!unameMatch && !nameMatch && !aliasMatch) return false;
       // For Guru Dea Natasya (u2), allow guru123 or any non-empty password when logging in by Dea Natasya
       if (u.id === 'u2' && (q.includes('dea') || u.password === p)) return true;
-      if (u.role === 'murid' && (u.password === p || ['murid123', 'murid456', 'murid789', '123456'].includes(p.toLowerCase()) || p.toLowerCase() === q)) return true;
+      if (u.role === 'murid' && (u.password === p || ['murid123', 'murid456', 'murid789', '123456', 'tumbuh123'].includes(p.toLowerCase()) || p.toLowerCase() === q)) return true;
       return u.password === p;
     });
     if (user) {

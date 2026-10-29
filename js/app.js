@@ -11,9 +11,22 @@ const App = {
     if (typeof SoundManager !== 'undefined') SoundManager.init();
     this._setupGlobalEvents();
 
-    // Always start at the login screen when first opening/entering the link
-    Auth.clearSession();
-    this.navigate('login');
+    // Handle initial navigation (preserve session handoff from file:// redirect if present)
+    const hadHandoff = window.location.search.includes('session_handoff');
+    if (!hadHandoff) {
+      Auth.clearSession();
+      this.navigate('login');
+    } else {
+      const user = Auth.getCurrentUser();
+      const currentHash = (window.location.hash || '').replace('#', '');
+      if (user && currentHash && ['admin', 'guru', 'murid', 'pos1', 'pos2', 'pos3', 'pos4'].includes(currentHash)) {
+        this.navigate(currentHash);
+      } else if (user) {
+        this.navigate(user.role === 'admin' ? 'admin' : (user.role === 'guru' ? 'guru' : 'murid'));
+      } else {
+        this.navigate('login');
+      }
+    }
   },
 
   // ── Router ────────────────────────────────────────────────
@@ -125,7 +138,7 @@ const App = {
         if (isTyping || hasModal) return;
 
         const evt = msg.event || msg.type;
-        if (['USERS_UPDATED', 'GROUPS_UPDATED', 'CONTENT_UPDATED', 'MATERIALS_UPDATED', 'SCORES_UPDATED', 'SETTINGS_UPDATED', 'STORAGE_UPDATED', 'DATA_UPDATED'].includes(evt)) {
+        if (['USERS_UPDATED', 'GROUPS_UPDATED', 'CONTENT_UPDATED', 'TOPICS_UPDATED', 'MATERIALS_UPDATED', 'SCORES_UPDATED', 'SETTINGS_UPDATED', 'STORAGE_UPDATED', 'DATA_UPDATED'].includes(evt)) {
           if (this.currentView === 'murid') MuridView.render();
           else if (this.currentView === 'pos1') Pos1View.render();
           else if (this.currentView === 'admin') AdminView.render(AdminView._currentTab || 'overview');
@@ -150,6 +163,7 @@ const App = {
   },
 
   closeModal() {
+    if (window.Pos1View) Pos1View._currentOpenTopicId = null;
     if (typeof SoundManager !== 'undefined') SoundManager.pauseBGMForMedia(false);
     const modal = document.getElementById('modal-backdrop');
     if (modal) {

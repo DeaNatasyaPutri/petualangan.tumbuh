@@ -476,26 +476,34 @@ const GuruView = {
   },
 
   // ══════════════════════════════════════════════════════════
-  // 3. MATERI POS 1 TAB (Sinkronisasi File Lokal Video & PDF)
+  // 3. MATERI POS 1 TAB (Sinkronisasi File Lokal Video, PDF, Link, & Gambar)
   // ══════════════════════════════════════════════════════════
   _tabMateri() {
     const topics = DB.getTopics();
+    const materials = DB.getMaterials();
 
     return `
       <div class="main-header">
         <div>
-          <h1 class="main-title">📤 Sinkronisasi Materi Pos 1 (Video & PDF)</h1>
-          <p class="main-subtitle">Unggah file Video (MP4/WebM) atau Dokumen PDF langsung dari komputer Anda. Materi otomatis terhubung dan tayang di Pos 1 Murid!</p>
+          <h1 class="main-title">📤 Manajemen & Riwayat Materi (Video, PDF, Gambar, & Link)</h1>
+          <p class="main-subtitle">Unggah file Video (MP4/WebM), Dokumen PDF, Gambar Kasus JPG/PNG, atau Tautan Video Web. Semua unggahan langsung tersimpan, terlihat di riwayat, dan tersinkronisasi real-time ke seluruh perangkat!</p>
         </div>
-        <button class="btn-secondary" onclick="App.navigate('pos1')">🔭 Pratinjau Pos 1 Murid</button>
+        <div style="display:flex;gap:10px">
+          <button class="btn-secondary" onclick="App.navigate('pos1')">🔭 Pratinjau Pos 1 Murid</button>
+          <button class="btn-secondary" onclick="App.navigate('pos2')">🎡 Pratinjau Pos 2 Murid</button>
+        </div>
       </div>
 
+      <!-- Formulir Unggah Materi Baru -->
       <div class="materi-upload-card">
-        <h3>📤 Unggah & Sinkronkan Materi ke Pos 1</h3>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <h3 style="margin:0">📤 Unggah & Lampirkan Materi Baru</h3>
+          <span class="badge-done" style="background:#E8F5E9;color:#2E7D32;font-size:0.8rem">⚡ Sinkronisasi Instan Aktif</span>
+        </div>
 
         <div class="ai-config-row">
           <div class="form-group">
-            <label class="form-label">Target Sinkronisasi Pos 1</label>
+            <label class="form-label">Target Sinkronisasi Pembelajaran</label>
             <select class="form-input" id="sync-target-mode" onchange="GuruView.toggleSyncTargetMode()">
               <option value="existing">🔗 Perbarui / Lampirkan ke Topik Pos 1 yang Ada</option>
               <option value="new">➕ Buat sebagai Kartu Topik Baru di Pos 1</option>
@@ -530,27 +538,27 @@ const GuruView = {
         </div>
 
         <div class="form-group">
-          <label class="form-label">Deskripsi Materi (Tampil di Pos 1)</label>
+          <label class="form-label">Deskripsi / Keterangan Materi</label>
           <textarea class="form-input" id="sync-topic-desc" rows="2" placeholder="Ringkasan materi pembelajaran untuk murid...">${topics[0]?.description || ''}</textarea>
         </div>
 
         <div class="upload-dual-grid">
-          <!-- Upload Video Lokal / URL -->
+          <!-- Upload Video Lokal / URL Link -->
           <div class="upload-box">
             <div class="upload-box-header">
               <span class="upload-box-icon">🎬</span>
               <div>
-                <h4>File Video Materi (Pemutar Internal)</h4>
-                <small>Pilih file video (.mp4 / .webm) dari File Explorer atau masukkan tautan embed</small>
+                <h4>File Video Lokal atau Tautan Web</h4>
+                <small>Pilih file video (.mp4 / .webm) atau tempel tautan video YouTube</small>
               </div>
             </div>
             <div class="form-group">
-              <label class="form-label">Unggah File Video Lokal (MP4/WebM/OGG)</label>
+              <label class="form-label">Unggah File Video Lokal (MP4 / WebM)</label>
               <input type="file" class="form-input file-input" id="sync-video-file" accept="video/mp4,video/webm,video/ogg,video/*">
             </div>
             <div class="form-group">
-              <label class="form-label">Atau URL Video YouTube (Opsional)</label>
-              <input type="text" class="form-input" id="sync-video-url" placeholder="https://www.youtube.com/watch?v=...">
+              <label class="form-label">Atau Masukkan URL / Tautan Video YouTube</label>
+              <input type="text" class="form-input" id="sync-video-url" value="${DB.toWatchUrl(topics[0]?.videoUrl) || ''}" placeholder="https://www.youtube.com/watch?v=...">
             </div>
           </div>
 
@@ -559,8 +567,8 @@ const GuruView = {
             <div class="upload-box-header">
               <span class="upload-box-icon">📄</span>
               <div>
-                <h4>File Dokumen Materi (PDF Viewer Internal)</h4>
-                <small>Pilih file dokumen (.pdf) dari File Explorer perangkat Anda</small>
+                <h4>File Dokumen Modul (PDF)</h4>
+                <small>Pilih file dokumen (.pdf) dari perangkat Anda</small>
               </div>
             </div>
             <div class="form-group">
@@ -568,18 +576,22 @@ const GuruView = {
               <input type="file" class="form-input file-input" id="sync-pdf-file" accept="application/pdf,.pdf">
             </div>
             <div class="form-hint" style="margin-top:8px">
-              💡 Dokumen PDF yang diunggah akan langsung memiliki tombol <strong>"📄 Baca Modul PDF"</strong> di kartu Pos 1 Murid dan ditampilkan melalui PDF Viewer internal.
+              💡 File PDF otomatis dapat dibaca langsung oleh Murid di Pos 1 melalui Viewer PDF internal.
             </div>
           </div>
         </div>
 
         <div class="modal-actions" style="justify-content:flex-start;margin-top:8px">
           <button class="btn-primary lg" id="btn-save-sync-materi" onclick="GuruView.saveSyncedMateri()">
-            💾 Unggah & Sinkronkan ke Pos 1 Sekarang
+            💾 Unggah & Sinkronkan Sekarang
           </button>
         </div>
       </div>
 
+      <!-- Riwayat Unggahan Materi (PDF, Video, Link, & Gambar) -->
+      ${this._renderRiwayatUnggahan(materials)}
+
+      <!-- Daftar Topik & Materi Aktif di Pos 1 -->
       <div class="section-title">📚 Daftar Topik & Materi Aktif di Pos 1 (${topics.length} Topik)</div>
       <div class="materials-list">
         ${topics.map(t => `
@@ -589,21 +601,314 @@ const GuruView = {
               <strong>${t.title} <span class="badge-kelas">${t.level}</span></strong>
               <p style="font-size:0.86rem;color:var(--text-muted);margin:2px 0">${t.description}</p>
               <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:4px">
-                <span class="badge-done">
-                  ${t.videoMediaId ? `🎬 Video Lokal: ${t.videoFileName}` : `🎬 Video: ${t.videoUrl ? 'Tersedia' : ' Kosong'}`}
-                </span>
+                ${t.videoUrl ? `<span class="badge-done" style="background:#E8F5E9;color:#2E7D32">🎬 Tautan Video: Tersedia</span>` : ''}
+                ${t.videoMediaId ? `<span class="badge-done" style="background:#FFF3E0;color:#E65100">📁 Video File: ${t.videoFileName || 'Tersedia'}</span>` : ''}
+                ${!t.videoUrl && !t.videoMediaId ? `<span class="badge-pending">🎬 Belum ada video</span>` : ''}
                 ${t.pdfMediaId
-                  ? `<span class="badge-done" style="background:#E3F2FD;color:#1565C0">📄 PDF Lokal: ${t.pdfFileName}</span>`
+                  ? `<span class="badge-done" style="background:#E3F2FD;color:#1565C0">📄 PDF: ${t.pdfFileName || 'Tersedia'}</span>`
                   : `<span class="badge-pending">📄 Belum ada PDF</span>`}
               </div>
             </div>
             <div class="gen-quiz-actions">
               <button class="btn-secondary sm" onclick="Pos1View.openMediaModal('${t.id}', 'video')">▶️ Cek Video</button>
+              ${t.videoUrl ? `<a href="${DB.toWatchUrl(t.videoUrl)}" target="_blank" rel="noopener noreferrer" class="btn-secondary sm" style="text-decoration:none;display:inline-flex;align-items:center;gap:4px">↗ YouTube</a>` : ''}
               ${t.pdfMediaId ? `<button class="btn-secondary sm" onclick="Pos1View.openMediaModal('${t.id}', 'pdf')">📄 Cek PDF</button>` : ''}
               <button class="btn-icon del" title="Hapus Topik" onclick="GuruView.deleteTopicPos1('${t.id}', '${t.title.replace(/'/g, "\\'")}')">🗑️</button>
             </div>
           </div>`).join('')}
       </div>`;
+  },
+
+  _renderRiwayatUnggahan(materials) {
+    const filter = this._materialFilter || 'all';
+    const search = (this._materialSearch || '').toLowerCase();
+
+    const filtered = materials.filter(m => {
+      const type = m.type || (m.pdfMediaId ? 'pdf' : (m.videoMediaId ? 'video' : (m.url ? 'link' : 'image')));
+      if (filter === 'pdf' && type !== 'pdf') return false;
+      if (filter === 'video' && type !== 'video') return false;
+      if (filter === 'link' && type !== 'link') return false;
+      if (filter === 'image' && type !== 'image') return false;
+
+      if (search) {
+        const text = `${m.title || ''} ${m.fileName || ''} ${m.topicTitle || ''} ${m.url || ''}`.toLowerCase();
+        if (!text.includes(search)) return false;
+      }
+      return true;
+    });
+
+    const pdfCount = materials.filter(m => (m.type === 'pdf' || m.pdfMediaId)).length;
+    const videoCount = materials.filter(m => (m.type === 'video' || m.videoMediaId)).length;
+    const linkCount = materials.filter(m => (m.type === 'link' || (m.url && !m.videoMediaId))).length;
+    const imageCount = materials.filter(m => (m.type === 'image' || m.imageData)).length;
+
+    return `
+      <div class="materi-history-card" style="background:var(--white);border-radius:20px;padding:24px;box-shadow:var(--shadow);margin-bottom:28px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+          <div>
+            <h3 style="margin:0;display:flex;align-items:center;gap:10px">
+              <span>🕒 Riwayat Unggahan Materi & Dokumen</span>
+              <span class="badge-done" style="font-size:0.8rem">${materials.length} Item Tersimpan</span>
+            </h3>
+            <p class="form-hint" style="margin-top:4px">
+              Seluruh riwayat berkas PDF, Video, Gambar, atau Tautan yang pernah Anda unggah tetap tersimpan permanen di sini dan tersinkronisasi real-time.
+            </p>
+          </div>
+        </div>
+
+        <!-- Filter & Search Toolbar -->
+        <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:16px 0">
+          <div class="filter-pills" style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="filter-pill ${filter === 'all' ? 'active' : ''}" onclick="GuruView.setMaterialFilter('all')">
+              Semua (${materials.length})
+            </button>
+            <button class="filter-pill ${filter === 'pdf' ? 'active' : ''}" onclick="GuruView.setMaterialFilter('pdf')">
+              📄 Dokumen PDF (${pdfCount})
+            </button>
+            <button class="filter-pill ${filter === 'video' ? 'active' : ''}" onclick="GuruView.setMaterialFilter('video')">
+              🎬 Video Lokal (${videoCount})
+            </button>
+            <button class="filter-pill ${filter === 'link' ? 'active' : ''}" onclick="GuruView.setMaterialFilter('link')">
+              🔗 Tautan Video (${linkCount})
+            </button>
+            <button class="filter-pill ${filter === 'image' ? 'active' : ''}" onclick="GuruView.setMaterialFilter('image')">
+              🖼️ Gambar (${imageCount})
+            </button>
+          </div>
+
+          <div style="flex:1;min-width:240px">
+            <input type="text" class="form-input" id="history-search-input" value="${this._materialSearch || ''}" placeholder="🔍 Cari nama file, judul materi, atau topik..." oninput="GuruView.setMaterialSearch(this.value)">
+          </div>
+        </div>
+
+        <!-- Materials List -->
+        <div class="materials-list" id="history-materials-list">
+          ${filtered.length > 0 ? filtered.map((m, idx) => {
+            const type = m.type || (m.pdfMediaId ? 'pdf' : (m.videoMediaId ? 'video' : (m.url ? 'link' : 'image')));
+            const iconMap = { pdf: '📄', video: '🎬', link: '🔗', image: '🖼️' };
+            const typeLabelMap = { pdf: 'Dokumen PDF', video: 'Video Lokal', link: 'Tautan Video', image: 'Lampiran Gambar' };
+            const badgeBg = { pdf: '#E3F2FD', video: '#E8F5E9', link: '#FFF3E0', image: '#F3E5F5' };
+            const badgeColor = { pdf: '#1565C0', video: '#2E7D32', link: '#E65100', image: '#7B1FA2' };
+
+            return `
+              <div class="material-card" style="border-left: 5px solid ${badgeColor[type] || '#1565C0'}">
+                <div class="material-icon">${iconMap[type] || '📁'}</div>
+                <div class="material-info">
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <span class="badge-done" style="background:${badgeBg[type]};color:${badgeColor[type]};font-weight:800;font-size:0.78rem">
+                      ${iconMap[type]} ${typeLabelMap[type]}
+                    </span>
+                    <strong>${m.title}</strong>
+                    <span class="badge-done" style="background:#E8F5E9;color:#2E7D32;font-size:0.75rem">⚡ Tersinkron</span>
+                  </div>
+                  <div style="font-size:0.86rem;color:var(--text-muted);display:flex;gap:14px;flex-wrap:wrap;margin-top:4px">
+                    ${m.topicTitle ? `<span>📌 Terhubung: <strong>${m.topicTitle}</strong></span>` : ''}
+                    ${m.fileName ? `<span>📁 File: <code>${m.fileName}</code></span>` : ''}
+                    ${m.fileSize ? `<span>⚖️ Ukuran: ${m.fileSize}</span>` : ''}
+                    <span>⏱️ ${App.formatDate(m.createdAt)} (${App.timeAgo(m.createdAt)})</span>
+                    <span>👤 Pengunggah: ${m.uploaderName || 'Guru'}</span>
+                  </div>
+                </div>
+                <div class="gen-quiz-actions">
+                  <button class="btn-primary sm" onclick="GuruView.previewMaterial('${m.id}')">
+                    👁️ Pratinjau
+                  </button>
+                  ${(m.url || m.watchUrl) ? `
+                    <a href="${DB.toWatchUrl(m.watchUrl || m.url)}" target="_blank" rel="noopener noreferrer" class="btn-secondary sm" style="text-decoration:none;display:inline-flex;align-items:center;gap:4px">
+                      ↗ YouTube
+                    </a>
+                  ` : ''}
+                  <button class="btn-icon del" title="Hapus dari Riwayat" onclick="GuruView.deleteMaterialPrompt('${m.id}')">
+                    🗑️
+                  </button>
+                </div>
+              </div>
+            `;
+          }).join('') : `
+            <div class="empty-state" style="padding:28px 20px">
+              <span style="font-size:2.5rem">📂</span>
+              <p style="margin-top:6px;font-weight:700">Belum ada riwayat unggahan yang cocok.</p>
+              <small style="color:var(--text-muted)">File PDF, Video, Link, atau Gambar yang Anda unggah akan otomatis tercatat dan tersimpan rapi di sini.</small>
+            </div>
+          `}
+        </div>
+      </div>
+    `;
+  },
+
+  setMaterialFilter(filter) {
+    this._materialFilter = filter;
+    this.render('materi');
+  },
+
+  setMaterialSearch(query) {
+    this._materialSearch = query;
+    const q = (query || '').toLowerCase();
+    const cards = document.querySelectorAll('#history-materials-list .material-card');
+    cards.forEach(c => {
+      const text = c.textContent.toLowerCase();
+      c.style.display = (!q || text.includes(q)) ? 'flex' : 'none';
+    });
+  },
+
+  _formatFileSize(bytes) {
+    if (!bytes || isNaN(bytes)) return '-';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  },
+
+  async previewMaterial(mId) {
+    const materials = DB.getMaterials();
+    const m = materials.find(x => x.id === mId);
+    if (!m) return;
+
+    if (m.pdfMediaId || m.type === 'pdf') {
+      const mediaId = m.pdfMediaId;
+      let pdfObj = mediaId ? await MediaDB.getFileUrl(mediaId) : null;
+      if (pdfObj && pdfObj.url) {
+        App.showModal(`
+          <div class="video-modal">
+            <div class="video-modal-header" style="background:linear-gradient(135deg,#1565C0,#0D47A1)">
+              <span class="video-modal-emoji">📄</span>
+              <div style="flex:1">
+                <h2>${m.title}</h2>
+                <p>Dokumen PDF Modul Pembelajaran • File: ${pdfObj.name || m.fileName || 'materi.pdf'}</p>
+              </div>
+            </div>
+            <div class="internal-pdf-stage">
+              <embed src="${pdfObj.url}#toolbar=1&navpanes=1&scrollbar=1" type="application/pdf" class="internal-pdf-viewer" />
+            </div>
+            <div class="video-modal-footer">
+              <span class="tag">📄 ${pdfObj.name || 'Dokumen PDF'}</span>
+              <div style="display:flex;gap:10px">
+                <a href="${pdfObj.url}" download="${pdfObj.name || 'materi.pdf'}" class="btn-secondary sm" style="text-decoration:none">⬇️ Unduh PDF</a>
+                <button class="btn-primary" onclick="App.closeModal()">Tutup</button>
+              </div>
+            </div>
+          </div>`, 'xl');
+        return;
+      }
+    }
+
+    if (m.videoMediaId || (m.type === 'video' && m.videoMediaId)) {
+      const videoObj = await MediaDB.getFileUrl(m.videoMediaId);
+      if (videoObj && videoObj.url) {
+        if (typeof SoundManager !== 'undefined') SoundManager.pauseBGMForMedia(true);
+        App.showModal(`
+          <div class="video-modal">
+            <div class="video-modal-header" style="background:linear-gradient(135deg,#2E7D32,#1B5E20)">
+              <span class="video-modal-emoji">🎬</span>
+              <div style="flex:1">
+                <h2>${m.title}</h2>
+                <p>Video Pembelajaran Internal • File: ${videoObj.name || m.fileName || 'video.mp4'}</p>
+              </div>
+            </div>
+            <div class="internal-media-stage">
+              <video controls autoplay class="internal-video-player" src="${videoObj.url}">Browser Anda tidak mendukung video HTML5.</video>
+            </div>
+            <div class="video-modal-footer">
+              <span class="tag">🎬 ${videoObj.name || 'Video'}</span>
+              <div style="display:flex;gap:10px">
+                <a href="${videoObj.url}" download="${videoObj.name || 'video.mp4'}" class="btn-secondary sm" style="text-decoration:none">⬇️ Unduh Video</a>
+                <button class="btn-primary" onclick="App.closeModal()">Tutup</button>
+              </div>
+            </div>
+          </div>`, 'xl');
+        return;
+      }
+    }
+
+    if (m.url || m.type === 'link') {
+      const embedUrl = DB.getVideoPlayerSrc(m.url || m.watchUrl, true);
+      const watchUrl = DB.toWatchUrl(m.watchUrl || m.url);
+      const isFileProtocol = (typeof window !== 'undefined' && window.location && window.location.protocol === 'file:');
+      App.showModal(`
+        <div class="video-modal">
+          <div class="video-modal-header" style="background:linear-gradient(135deg,#E65100,#BF360C)">
+            <span class="video-modal-emoji">🎬</span>
+            <div style="flex:1">
+              <h2>${m.title}</h2>
+              <p>Pratinjau Video YouTube Pembelajaran</p>
+            </div>
+          </div>
+          <div class="video-player-stage" style="padding:16px">
+            <div class="video-wrapper" style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;border-radius:12px;background:#000;box-shadow:0 8px 24px rgba(0,0,0,0.18)">
+              <iframe
+                src="${embedUrl}"
+                frameborder="0"
+                allowfullscreen
+                referrerpolicy="strict-origin-when-cross-origin"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                style="position:absolute;top:0;left:0;width:100%;height:100%;border:none;">
+              </iframe>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-top:12px;padding:10px 14px;background:#FFF3E0;border:1px solid #FFE0B2;border-radius:10px;">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span style="font-size:1.2rem">📺</span>
+                <div>
+                  <strong style="font-size:0.88rem;color:#E65100;display:block">Tautan: ${watchUrl}</strong>
+                  <small style="color:#666">Video berputar langsung. Jika ada batasan browser, gunakan tombol di samping.</small>
+                </div>
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                ${isFileProtocol ? `
+                  <a href="http://127.0.0.1:8765/index.html#guru" target="_blank" class="btn-primary sm" style="background:#2E7D32;border-color:#2E7D32;text-decoration:none;display:inline-flex;align-items:center;gap:6px;font-weight:700">
+                    🌐 Buka Server Lokal ↗
+                  </a>
+                ` : ''}
+                <a href="${watchUrl}" target="_blank" rel="noopener noreferrer" class="btn-primary sm" style="background:#CC0000;border-color:#CC0000;text-decoration:none;display:inline-flex;align-items:center;gap:6px;font-weight:700">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
+                  Buka di YouTube ↗
+                </a>
+              </div>
+            </div>
+          </div>
+          <div class="video-modal-footer">
+            <span class="tag">🎬 Video YouTube</span>
+            <button class="btn-primary" onclick="App.closeModal()">Tutup</button>
+          </div>
+        </div>`, 'xl');
+      return;
+    }
+
+    if (m.imageData || m.type === 'image') {
+      App.showModal(`
+        <div class="modal-box" style="text-align:center">
+          <h3>🖼️ ${m.title}</h3>
+          <div style="margin:16px 0">
+            <img src="${m.imageData}" alt="Preview" style="max-width:100%;max-height:60vh;border-radius:12px;box-shadow:var(--shadow)">
+          </div>
+          <button class="btn-primary" onclick="App.closeModal()">Tutup</button>
+        </div>`, 'md');
+      return;
+    }
+
+    App.showToast('Pratinjau berkas materi tidak tersedia.', 'warning');
+  },
+
+  deleteMaterialPrompt(mId) {
+    const materials = DB.getMaterials();
+    const m = materials.find(x => x.id === mId);
+    if (!m) return;
+
+    App.showModal(`
+      <div class="modal-confirm">
+        <div class="confirm-icon">🗑️</div>
+        <h3>Hapus dari Riwayat Unggahan?</h3>
+        <p>Apakah Anda yakin ingin menghapus <strong>${m.title}</strong> dari riwayat unggahan ini?</p>
+        <div class="confirm-actions">
+          <button class="btn-secondary" onclick="App.closeModal()">Batal</button>
+          <button class="btn-danger" onclick="GuruView.doDeleteMaterial('${m.id}')">Ya, Hapus</button>
+        </div>
+      </div>`);
+  },
+
+  doDeleteMaterial(mId) {
+    DB.deleteMaterial(mId);
+    App.closeModal();
+    App.showToast('Materi berhasil dihapus dari riwayat unggahan!', 'success');
+    this.render('materi');
   },
 
   toggleSyncTargetMode() {
@@ -625,31 +930,29 @@ const GuruView = {
     const descEl = document.getElementById('sync-topic-desc');
     const urlEl = document.getElementById('sync-video-url');
     if (descEl) descEl.value = topic.description || '';
-    if (urlEl) urlEl.value = topic.videoUrl || '';
+    if (urlEl) urlEl.value = DB.toWatchUrl(topic.videoUrl) || '';
   },
 
   async saveSyncedMateri() {
     const user = Auth.getCurrentUser();
     const mode = document.getElementById('sync-target-mode').value;
-    const desc = document.getElementById('sync-topic-desc').value.trim();
-    const videoFile = document.getElementById('sync-video-file').files[0];
-    const pdfFile = document.getElementById('sync-pdf-file').files[0];
-    const videoUrlInput = document.getElementById('sync-video-url').value.trim();
+    const desc = document.getElementById('sync-topic-desc')?.value.trim() || '';
+    const videoFileInput = document.getElementById('sync-video-file');
+    const pdfFileInput = document.getElementById('sync-pdf-file');
+    const videoFile = videoFileInput?.files?.[0];
+    const pdfFile = pdfFileInput?.files?.[0];
+    const videoUrlInput = document.getElementById('sync-video-url')?.value.trim() || '';
 
     const btn = document.getElementById('btn-save-sync-materi');
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span> Menyimpan & Menyinkronkan File...';
+    btn.innerHTML = '<span class="spinner"></span> Menyimpan & Menyinkronkan...';
 
     try {
-      let savedVideoMeta = null;
-      let savedPdfMeta = null;
-
-      if (videoFile) {
-        savedVideoMeta = await MediaDB.saveFile(videoFile);
-      }
-      if (pdfFile) {
-        savedPdfMeta = await MediaDB.saveFile(pdfFile);
-      }
+      // Parallel fast local saves (each takes <10ms)
+      const [savedVideoMeta, savedPdfMeta] = await Promise.all([
+        videoFile ? MediaDB.saveFile(videoFile) : Promise.resolve(null),
+        pdfFile ? MediaDB.saveFile(pdfFile) : Promise.resolve(null)
+      ]);
 
       if (mode === 'existing') {
         const topicId = document.getElementById('sync-topic-id').value;
@@ -662,12 +965,15 @@ const GuruView = {
         if (savedVideoMeta) {
           updates.videoMediaId = savedVideoMeta.id;
           updates.videoFileName = savedVideoMeta.name;
+        } else if (videoUrlInput) {
+          // If teacher explicitly provided a video URL and no new video file was uploaded,
+          // clear previous videoMediaId so the new video URL is 100% active and played for students!
+          updates.videoMediaId = null;
+          updates.videoFileName = null;
         }
+
         if (videoUrlInput) {
-          updates.videoUrl = this._toEmbedUrl(videoUrlInput);
-          if (!savedVideoMeta && videoUrlInput !== topic.videoUrl) {
-            // If guru explicitly changes URL without uploading a local file, keep URL updated
-          }
+          updates.videoUrl = DB.toEmbedUrl(videoUrlInput);
         }
         if (savedPdfMeta) {
           updates.pdfMediaId = savedPdfMeta.id;
@@ -676,17 +982,49 @@ const GuruView = {
 
         DB.updateTopic(topicId, updates);
 
-        if (savedVideoMeta || savedPdfMeta) {
+        // Record history for whatever was uploaded/linked
+        if (savedPdfMeta) {
           DB.addMaterial({
-            title: `${topic.title} (${savedVideoMeta ? savedVideoMeta.name : ''} ${savedPdfMeta ? savedPdfMeta.name : ''})`.trim(),
-            type: savedPdfMeta && !savedVideoMeta ? 'pdf' : 'video',
+            title: `${topic.title} — ${savedPdfMeta.name}`,
+            type: 'pdf',
             topicId: topic.id,
-            videoMediaId: savedVideoMeta?.id || null,
-            pdfMediaId: savedPdfMeta?.id || null,
-            guruId: user.id
+            topicTitle: topic.title,
+            pdfMediaId: savedPdfMeta.id,
+            fileName: savedPdfMeta.name,
+            fileSize: this._formatFileSize(savedPdfMeta.size),
+            guruId: user?.id || 'u2',
+            uploaderName: user?.name || 'Guru'
           });
         }
-        App.showToast(`Materi pada topik "${topic.title}" berhasil diperbarui & tersinkronisasi ke Pos 1!`, 'success');
+        if (savedVideoMeta) {
+          DB.addMaterial({
+            title: `${topic.title} — ${savedVideoMeta.name}`,
+            type: 'video',
+            topicId: topic.id,
+            topicTitle: topic.title,
+            videoMediaId: savedVideoMeta.id,
+            fileName: savedVideoMeta.name,
+            fileSize: this._formatFileSize(savedVideoMeta.size),
+            guruId: user?.id || 'u2',
+            uploaderName: user?.name || 'Guru'
+          });
+        }
+        if (videoUrlInput && !savedVideoMeta) {
+          DB.addMaterial({
+            title: `${topic.title} (Tautan Video YouTube)`,
+            type: 'link',
+            topicId: topic.id,
+            topicTitle: topic.title,
+            url: DB.toEmbedUrl(videoUrlInput),
+            watchUrl: DB.toWatchUrl(videoUrlInput),
+            fileName: DB.toWatchUrl(videoUrlInput),
+            fileSize: 'Tautan YouTube',
+            guruId: user?.id || 'u2',
+            uploaderName: user?.name || 'Guru'
+          });
+        }
+
+        App.showToast(`Materi pada topik "${topic.title}" berhasil diunggah & tersinkron real-time!`, 'success');
       } else {
         const title = document.getElementById('new-topic-title').value.trim();
         const emoji = document.getElementById('new-topic-emoji').value.trim() || '📘';
@@ -695,13 +1033,13 @@ const GuruView = {
         if (!title) {
           App.showToast('Judul topik baru wajib diisi!', 'error');
           btn.disabled = false;
-          btn.innerHTML = '💾 Unggah & Sinkronkan ke Pos 1 Sekarang';
+          btn.innerHTML = '💾 Unggah & Sinkronkan Sekarang';
           return;
         }
         if (!savedVideoMeta && !videoUrlInput && !savedPdfMeta) {
-          App.showToast('Unggah minimal 1 file Video atau PDF (atau isi URL Video)!', 'error');
+          App.showToast('Unggah minimal 1 file Video, Dokumen PDF, atau masukkan URL Video!', 'error');
           btn.disabled = false;
-          btn.innerHTML = '💾 Unggah & Sinkronkan ke Pos 1 Sekarang';
+          btn.innerHTML = '💾 Unggah & Sinkronkan Sekarang';
           return;
         }
 
@@ -728,24 +1066,62 @@ const GuruView = {
           level
         });
 
-        DB.addMaterial({
-          title,
-          type: savedPdfMeta && !savedVideoMeta ? 'pdf' : 'video',
-          topicId: newTopic.id,
-          videoMediaId: savedVideoMeta?.id || null,
-          pdfMediaId: savedPdfMeta?.id || null,
-          guruId: user.id
-        });
+        if (savedPdfMeta) {
+          DB.addMaterial({
+            title: `${title} — ${savedPdfMeta.name}`,
+            type: 'pdf',
+            topicId: newTopic.id,
+            topicTitle: title,
+            pdfMediaId: savedPdfMeta.id,
+            fileName: savedPdfMeta.name,
+            fileSize: this._formatFileSize(savedPdfMeta.size),
+            guruId: user?.id || 'u2',
+            uploaderName: user?.name || 'Guru'
+          });
+        }
+        if (savedVideoMeta) {
+          DB.addMaterial({
+            title: `${title} — ${savedVideoMeta.name}`,
+            type: 'video',
+            topicId: newTopic.id,
+            topicTitle: title,
+            videoMediaId: savedVideoMeta.id,
+            fileName: savedVideoMeta.name,
+            fileSize: this._formatFileSize(savedVideoMeta.size),
+            guruId: user?.id || 'u2',
+            uploaderName: user?.name || 'Guru'
+          });
+        }
+        if (videoUrlInput && !savedVideoMeta) {
+          DB.addMaterial({
+            title: `${title} (Tautan Video YouTube)`,
+            type: 'link',
+            topicId: newTopic.id,
+            topicTitle: title,
+            url: DB.toEmbedUrl(videoUrlInput),
+            watchUrl: DB.toWatchUrl(videoUrlInput),
+            fileName: DB.toWatchUrl(videoUrlInput),
+            fileSize: 'Tautan YouTube',
+            guruId: user?.id || 'u2',
+            uploaderName: user?.name || 'Guru'
+          });
+        }
 
         App.showToast(`Topik baru "${title}" berhasil dibuat & langsung tayang di Pos 1!`, 'success');
       }
+
+      // Reset form inputs
+      if (videoFileInput) videoFileInput.value = '';
+      if (pdfFileInput) pdfFileInput.value = '';
+      const urlInput = document.getElementById('sync-video-url');
+      if (urlInput) urlInput.value = '';
 
       this.render('materi');
     } catch (err) {
       console.error(err);
       App.showToast('Gagal menyimpan file: ' + err.message, 'error');
       btn.disabled = false;
-      btn.innerHTML = '💾 Unggah & Sinkronkan ke Pos 1 Sekarang';
+      btn.innerHTML = '💾 Unggah & Sinkronkan Sekarang';
     }
   },
 
@@ -770,10 +1146,7 @@ const GuruView = {
   },
 
   _toEmbedUrl(url) {
-    if (!url) return '';
-    if (url.includes('embed')) return url;
-    const m = url.match(/[?&]v=([^&]+)/) || url.match(/youtu\.be\/([^?]+)/);
-    return m ? `https://www.youtube.com/embed/${m[1]}` : url;
+    return DB.toEmbedUrl(url);
   },
 
   // ══════════════════════════════════════════════════════════

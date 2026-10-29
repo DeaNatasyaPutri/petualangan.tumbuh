@@ -4,8 +4,28 @@
 // ============================================================
 
 const Pos1View = {
+  _unsubRT: null,
+  _currentOpenTopicId: null,
 
   render() {
+    if (this._unsubRT) { this._unsubRT(); this._unsubRT = null; }
+    this._unsubRT = RealtimeSync.subscribe((evt) => {
+      if (App.currentView === 'pos1') {
+        const type = evt.type || evt.event;
+        if (['TOPICS_UPDATED', 'DATA_UPDATED'].includes(type)) {
+          const hasModal = !!document.getElementById('modal-backdrop');
+          if (!hasModal) {
+            this.render();
+          } else {
+            this._updateTopicCardsInPlace();
+            if (this._currentOpenTopicId) {
+              this._syncModalPlayerIfOpen(this._currentOpenTopicId);
+            }
+          }
+        }
+      }
+    });
+
     const user = Auth.getCurrentUser();
     const topics = DB.getTopics();
     const scores = user ? DB.getScoreByUser(user.id) : {};
@@ -64,11 +84,50 @@ const Pos1View = {
       </div>`;
   },
 
+  _updateTopicCardsInPlace() {
+    const topics = DB.getTopics();
+    const user = Auth.getCurrentUser();
+    const scores = user ? DB.getScoreByUser(user.id) : {};
+    const watched = scores.pos1?.topicsWatched || [];
+    const grid = document.getElementById('topics-grid');
+    if (grid) {
+      grid.innerHTML = topics.map(t => this._renderTopicCard(t, watched)).join('');
+    }
+    const countCircle = document.querySelector('.pos-progress-circle');
+    if (countCircle) {
+      countCircle.textContent = `${watched.length}/${topics.length}`;
+    }
+  },
+
+  _syncModalPlayerIfOpen(topicId) {
+    const topic = DB.getTopics().find(t => t.id === topicId);
+    if (!topic) return;
+    const iframe = document.querySelector('.video-wrapper iframe');
+    if (iframe && topic.videoUrl) {
+      const targetSrc = DB.getVideoPlayerSrc(topic.videoUrl, true);
+      const ytId = DB.extractYouTubeId(topic.videoUrl);
+      if (ytId && !iframe.src.includes(ytId)) {
+        iframe.src = targetSrc;
+      }
+    }
+  },
+
   _renderTopicCard(topic, watched) {
     const isWatched = watched.includes(topic.id);
-    const hasVideo = Boolean(topic.videoMediaId || topic.videoUrl);
+    const hasLocalVideo = Boolean(topic.videoMediaId);
+    const hasVideoUrl = Boolean(topic.videoUrl);
+    const hasVideo = hasLocalVideo || hasVideoUrl;
     const hasPdf = Boolean(topic.pdfMediaId);
-    const hasGuruUpload = Boolean(topic.videoMediaId || topic.pdfMediaId);
+    const hasGuruUpload = Boolean(topic.videoMediaId || topic.pdfMediaId || (topic.videoUrl && !topic.videoUrl.includes('3sCVR7GS3xE')));
+
+    let videoBadgeText = '🎬 Video Edukasi';
+    if (hasLocalVideo && hasVideoUrl) {
+      videoBadgeText = '🎬 Video Link & File';
+    } else if (hasVideoUrl) {
+      videoBadgeText = '🎬 Video YouTube / Tautan';
+    } else if (hasLocalVideo) {
+      videoBadgeText = `🎬 Video Lokal (${topic.videoFileName || 'File'})`;
+    }
 
     return `
       <div class="topic-card ${isWatched ? 'watched' : ''}" data-title="${topic.title.toLowerCase()}" data-level="${topic.level}">
@@ -82,7 +141,7 @@ const Pos1View = {
           <h3 class="topic-card-title">${topic.title}</h3>
           <p class="topic-card-desc">${topic.description}</p>
           <div class="topic-card-tags">
-            ${hasVideo ? `<span class="tag">🎬 ${topic.videoMediaId ? 'Video Internal' : 'Video Edukasi'}</span>` : ''}
+            ${hasVideo ? `<span class="tag">${videoBadgeText}</span>` : ''}
             ${hasPdf ? `<span class="tag" style="background:#E3F2FD;color:#1565C0">📄 Modul PDF</span>` : ''}
             ${(topic.tags || []).slice(0, 2).map(tag => `<span class="tag">${tag}</span>`).join('')}
           </div>
@@ -118,11 +177,14 @@ const Pos1View = {
     this.filterTopics();
   },
 
-  async openMediaModal(topicId, mode = 'video') {
+  async openMediaModal(topicId, mode = 'video', sourceChoice = null) {
+    this._currentOpenTopicId = topicId;
     const topic = DB.getTopics().find(t => t.id === topicId);
     if (!topic) return;
 
-    const hasVideo = Boolean(topic.videoMediaId || topic.videoUrl);
+    const hasLocalVideo = Boolean(topic.videoMediaId);
+    const hasVideoUrl = Boolean(topic.videoUrl);
+    const hasVideo = hasLocalVideo || hasVideoUrl;
     const hasPdf = Boolean(topic.pdfMediaId);
     const activeMode = (mode === 'pdf' && hasPdf) ? 'pdf' : (hasVideo ? 'video' : 'pdf');
 
@@ -139,24 +201,74 @@ const Pos1View = {
     let viewerHtml = '';
     if (activeMode === 'video') {
       if (typeof SoundManager !== 'undefined') SoundManager.pauseBGMForMedia(true);
-      if (localVideoObj && localVideoObj.url) {
+
+      const hasBoth = Boolean(localVideoObj?.url && topic.videoUrl);
+      const playSource = sourceChoice || (topic.videoUrl ? 'url' : 'file');
+
+      let switcherHtml = '';
+      if (hasBoth) {
+        switcherHtml = `
+          <div style="display:flex;gap:8px;margin-bottom:12px;background:rgba(0,0,0,0.06);padding:6px;border-radius:10px">
+            <button class="filter-pill ${playSource === 'url' ? 'active' : ''}" style="margin:0;cursor:pointer" onclick="Pos1View.openMediaModal('${topic.id}', 'video', 'url')">
+              🎬 Tautan Video (YouTube)
+            </button>
+            <button class="filter-pill ${playSource === 'file' ? 'active' : ''}" style="margin:0;cursor:pointer" onclick="Pos1View.openMediaModal('${topic.id}', 'video', 'file')">
+              📁 File Video Lokal (${localVideoObj.name || 'File'})
+            </button>
+          </div>`;
+      }
+
+      if (playSource === 'file' && localVideoObj && localVideoObj.url) {
         viewerHtml = `
+          ${switcherHtml}
           <div class="internal-media-stage">
             <video controls autoplay class="internal-video-player" src="${localVideoObj.url}">
               Browser Anda tidak mendukung pemutar video HTML5.
             </video>
           </div>`;
       } else if (topic.videoUrl) {
-        const sep = topic.videoUrl.includes('?') ? '&' : '?';
+        const embedSrc = DB.getVideoPlayerSrc(topic.videoUrl, true);
+        const watchUrl = DB.toWatchUrl(topic.videoUrl);
+        const isFileProtocol = (typeof window !== 'undefined' && window.location && window.location.protocol === 'file:');
         viewerHtml = `
-          <div class="video-wrapper">
+          ${switcherHtml}
+          <div class="video-wrapper" style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;border-radius:12px;background:#000;box-shadow:0 8px 24px rgba(0,0,0,0.18);">
             <iframe
-              src="${topic.videoUrl}${sep}autoplay=1&rel=0&modestbranding=1"
+              src="${embedSrc}"
               title="${topic.title}"
               frameborder="0"
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope"
-              allowfullscreen>
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              allowfullscreen
+              referrerpolicy="strict-origin-when-cross-origin"
+              style="position:absolute;top:0;left:0;width:100%;height:100%;border:none;">
             </iframe>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-top:12px;padding:10px 14px;background:#FFF3E0;border:1px solid #FFE0B2;border-radius:10px;">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-size:1.2rem">📺</span>
+              <div>
+                <strong style="font-size:0.88rem;color:#E65100;display:block">Tautan Video: ${watchUrl}</strong>
+                <small style="color:#666">Video langsung berputar otomatis. Jika ada batasan browser, gunakan tombol di samping.</small>
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              ${isFileProtocol ? `
+                <a href="http://127.0.0.1:8765/index.html#pos1" target="_blank" class="btn-primary sm" style="background:#2E7D32;border-color:#2E7D32;text-decoration:none;display:inline-flex;align-items:center;gap:6px;font-weight:700">
+                  🌐 Buka Server Lokal ↗
+                </a>
+              ` : ''}
+              <a href="${watchUrl}" target="_blank" rel="noopener noreferrer" class="btn-primary sm" style="background:#CC0000;border-color:#CC0000;text-decoration:none;display:inline-flex;align-items:center;gap:6px;font-weight:700">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
+                Buka di YouTube ↗
+              </a>
+            </div>
+          </div>`;
+      } else if (localVideoObj && localVideoObj.url) {
+        viewerHtml = `
+          <div class="internal-media-stage">
+            <video controls autoplay class="internal-video-player" src="${localVideoObj.url}">
+              Browser Anda tidak mendukung pemutar video HTML5.
+            </video>
           </div>`;
       } else {
         viewerHtml = `<div class="empty-state"><span>🎬</span><p>Video belum tersedia pada topik ini.</p></div>`;
@@ -197,9 +309,14 @@ const Pos1View = {
 
         <div class="video-modal-footer">
           <div class="video-tags">
-            <span class="tag">${activeMode === 'video' ? (localVideoObj ? `🎬 File: ${localVideoObj.name}` : '🎬 Video Pembelajaran') : `📄 File: ${localPdfObj?.name || 'Dokumen PDF'}`}</span>
+            <span class="tag">${activeMode === 'video' ? (topic.videoUrl ? '🎬 Tautan Video YouTube' : (localVideoObj ? `📁 File: ${localVideoObj.name}` : '🎬 Video Pembelajaran')) : `📄 File: ${localPdfObj?.name || 'Dokumen PDF'}`}</span>
           </div>
           <div style="display:flex;gap:10px">
+            ${(activeMode === 'video' && topic.videoUrl) ? `
+              <a href="${DB.toWatchUrl(topic.videoUrl)}" target="_blank" rel="noopener noreferrer" class="btn-secondary sm" style="text-decoration:none;display:inline-flex;align-items:center;gap:4px">
+                ↗ Buka di YouTube
+              </a>
+            ` : ''}
             ${(activeMode === 'pdf' && localPdfObj?.url) ? `
               <a href="${localPdfObj.url}" download="${localPdfObj.name || 'materi.pdf'}" class="btn-secondary sm" style="text-decoration:none">⬇️ Unduh PDF</a>
             ` : ''}

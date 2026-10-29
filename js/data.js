@@ -522,18 +522,35 @@ const DEFAULT_DATA = {
     answers: {},
     currentScreen: 0,
     completed: false
-  }
+  },
+
+  // ── CLOUD MEDIA MAP (Cross-Device Uploaded PDF/Video/Image URLs) ──
+  cloudMediaMap: {}
 };
 
-// ── Real-Time Synchronization Engine (BroadcastChannel + Storage + Cross-Profile Server Sync) ──
+// ── Real-Time Synchronization Engine (BroadcastChannel + Storage + Local Server + 24/7 Cloud Sync) ──
 const RealtimeSync = {
   _channel: null,
   _listeners: [],
   _clientId: 'client_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
-  _serverUrl: 'http://127.0.0.1:8765',
+  _serverUrl: (typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http') && window.location.port === '8765')
+    ? window.location.origin
+    : 'http://127.0.0.1:8765',
+  _cloudBaseUrl: 'https://ntfy.sh',
+  _cloudTopic: 'ptumbuh_dea_sync_v11',
+  _cloudMediaTopic: 'ptumbuh_dea_v11_media',
+  _processedCloudIds: new Set(),
+  _lastCloudId: null,
+  _cloudPushTimers: {},
+  _cloudEventTimer: null,
+  _chunkBuffer: {},
+  _sse: null,
   _lastServerVersion: 0,
   _lastEventTs: 0,
+  _localServerFails: 0,
+  _lastLocalAttempt: 0,
   _pollTimer: null,
+  _cloudPollTimer: null,
 
   init() {
     // 1. BroadcastChannel for instant multi-tab / multi-window real-time sync
@@ -542,6 +559,7 @@ const RealtimeSync = {
       this._channel.onmessage = (e) => {
         if (e.data && e.data.senderId !== this._clientId) {
           this._notify(e.data);
+          this._refreshActiveViewIfIdle();
         }
       };
     }
@@ -555,7 +573,7 @@ const RealtimeSync = {
             this._notify(payload);
           }
         } catch {}
-      } else if (e.key && e.key.startsWith('tumbuh_') && e.key !== 'tumbuh_session') {
+      } else if (e.key && e.key.startsWith('tumbuh_') && !e.key.startsWith('tumbuh_ts_') && e.key !== 'tumbuh_session') {
         this._refreshActiveViewIfIdle();
       }
     });
@@ -563,71 +581,354 @@ const RealtimeSync = {
     // 3. Refresh when switching back to window/tab
     window.addEventListener('focus', () => {
       this.pullFromServer(true);
+      this.pullFromCloud(true);
     });
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) this.pullFromServer(true);
+      if (!document.hidden) {
+        this.pullFromServer(true);
+        this.pullFromCloud(true);
+      }
     });
 
-    // 4. Cross-Email / Cross-Chrome-Profile / Cross-Browser Server Polling
+    // 4. Local Cross-Profile Server Polling (for localhost / LAN)
     this.pullFromServer(true);
     if (!this._pollTimer) {
-      this._pollTimer = setInterval(() => this.pullFromServer(false), 700);
+      this._pollTimer = setInterval(() => this.pullFromServer(false), 600);
+    }
+
+    // 5. 24/7 Cross-Device / Cross-Network Cloud Real-Time Sync (Instant SSE + Fast Polling Fallback)
+    this.pullFromCloud(true);
+    this.connectCloudStream();
+    if (!this._cloudPollTimer) {
+      this._cloudPollTimer = setInterval(() => this.pullFromCloud(false), 1200);
     }
   },
 
-  async pullFromServer(forceRefreshView = false) {
+  connectCloudStream() {
+    if (typeof EventSource === 'undefined' || this._sse) return;
     try {
-      const res = await fetch(`${this._serverUrl}/api/sync?since=${this._lastServerVersion}`, {
+      const sse = new EventSource(`${this._cloudBaseUrl}/${this._cloudTopic}/sse`);
+      this._sse = sse;
+      sse.onmessage = async (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          const changed = await this._processCloudMessage(msg, false);
+          if (changed) {
+            this._refreshActiveViewIfIdle();
+          }
+        } catch {}
+      };
+      sse.onerror = () => {
+        try { sse.close(); } catch {}
+        this._sse = null;
+        setTimeout(() => this.connectCloudStream(), 2500);
+      };
+    } catch {}
+  },
+
+  async pullFromCloud(forceRefreshView = false) {
+    try {
+      const sinceParam = this._lastCloudId || 'all';
+      const res = await fetch(`${this._cloudBaseUrl}/${this._cloudTopic}/json?poll=1&since=${encodeURIComponent(sinceParam)}`, {
         method: 'GET',
         cache: 'no-store'
       });
       if (!res.ok) return;
+      const text = await res.text();
+      const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+
+      if (lines.length === 0) {
+        if (!this._lastCloudId) {
+          this._lastCloudId = 'all';
+          this.publishCloudSnapshot();
+        }
+        return;
+      }
+
+      let anyChanged = false;
+      for (let i = 0; i < lines.length; i++) {
+        try {
+          const msg = JSON.parse(lines[i]);
+          const isLast = (i === lines.length - 1);
+          const changed = await this._processCloudMessage(msg, !isLast);
+          if (changed) anyChanged = true;
+        } catch {}
+      }
+
+      if (anyChanged || forceRefreshView) {
+        this._refreshActiveViewIfIdle();
+      }
+    } catch {}
+  },
+
+  async _processCloudMessage(msg, isBatchReplay = false) {
+    if (!msg || msg.event !== 'message' || !msg.id) return false;
+    if (this._processedCloudIds.has(msg.id)) return false;
+    this._processedCloudIds.add(msg.id);
+    this._lastCloudId = msg.id;
+
+    let payload = null;
+    try {
+      if (msg.attachment && msg.attachment.url) {
+        const attRes = await fetch(msg.attachment.url, { cache: 'no-store' });
+        if (!attRes.ok) return false;
+        payload = await attRes.json();
+      } else if (msg.message) {
+        payload = JSON.parse(msg.message);
+      }
+    } catch {
+      return false;
+    }
+    if (!payload || typeof payload !== 'object') return false;
+
+    // Handle inline chunked payload reassembly for fast >3.5KB sync without attachment lag
+    if (payload.type === 'KEY_CHUNK' && payload.chunkId) {
+      if (payload.senderId === this._clientId) return false;
+      let entry = this._chunkBuffer[payload.chunkId];
+      if (!entry) {
+        entry = { parts: new Array(payload.total), received: 0, total: payload.total, ts: Date.now() };
+        this._chunkBuffer[payload.chunkId] = entry;
+      }
+      if (entry.parts[payload.idx] === undefined) {
+        entry.parts[payload.idx] = payload.data;
+        entry.received++;
+      }
+      if (entry.received < entry.total) return false;
+      delete this._chunkBuffer[payload.chunkId];
+      try {
+        payload = JSON.parse(entry.parts.join(''));
+      } catch {
+        return false;
+      }
+    }
+
+    return this._applyCloudPayload(payload, msg, isBatchReplay);
+  },
+
+  _applyCloudPayload(payload, msg, isBatchReplay = false) {
+    let changed = false;
+
+    // 1. Full state snapshot
+    if (payload.type === 'FULL_SNAPSHOT' && payload.store && typeof payload.store === 'object') {
+      const keyTsMap = payload.keyTimestamps || {};
+      Object.keys(payload.store).forEach(k => {
+        const incomingTs = keyTsMap[k] || payload.ts || ((msg.time || 0) * 1000);
+        const localTs = DB.getKeyTs(k);
+        const shouldApply = (payload.senderId === 'server_init')
+          ? (localTs === 0)
+          : (incomingTs >= localTs);
+        if (shouldApply) {
+          const incomingStr = JSON.stringify(payload.store[k]);
+          if (incomingStr !== localStorage.getItem(DB._prefix + k)) {
+            localStorage.setItem(DB._prefix + k, incomingStr);
+            changed = true;
+          }
+          if (incomingTs > localTs) {
+            DB.setKeyTs(k, incomingTs);
+          }
+        }
+      });
+      return changed;
+    }
+
+    // 2. System reset
+    if (payload.type === 'SYSTEM_RESET' && payload.senderId !== this._clientId) {
+      Object.keys(DEFAULT_DATA).forEach(key => {
+        localStorage.removeItem(DB._prefix + key);
+        DB.setKeyTs(key, 0);
+      });
+      DB.init();
+      return true;
+    }
+
+    // 3. Single key update
+    if (payload.key !== undefined && payload.value !== undefined) {
+      const k = payload.key;
+      const incomingTs = payload.ts || ((msg.time || 0) * 1000);
+      const localTs = DB.getKeyTs(k);
+      if (incomingTs >= localTs && payload.senderId !== this._clientId) {
+        const incomingStr = JSON.stringify(payload.value);
+        if (incomingStr !== localStorage.getItem(DB._prefix + k)) {
+          localStorage.setItem(DB._prefix + k, incomingStr);
+          changed = true;
+        }
+        DB.setKeyTs(k, incomingTs);
+        if (k === 'topics') {
+          this._notify({ type: 'TOPICS_UPDATED', topics: payload.value, ts: incomingTs });
+        }
+        if (!isBatchReplay && payload.event) {
+          this._notify(payload.event);
+        }
+      }
+    }
+
+    // 4. Standalone real-time event
+    if (payload.type === 'RT_EVENT' && payload.event && payload.senderId !== this._clientId) {
+      const evTs = payload.ts || payload.event.ts || ((msg.time || 0) * 1000);
+      const isRecent = (Date.now() - evTs) < 15000;
+      if ((!isBatchReplay || isRecent) && evTs > this._lastEventTs) {
+        this._lastEventTs = evTs;
+        this._notify(payload.event);
+      }
+    }
+
+    return changed;
+  },
+
+  async publishCloudSnapshot() {
+    try {
+      const store = {};
+      const keyTimestamps = {};
+      const now = Date.now();
+      Object.keys(DEFAULT_DATA).forEach(k => {
+        store[k] = DB.get(k);
+        keyTimestamps[k] = DB.getKeyTs(k) || now;
+      });
+      const bodyStr = JSON.stringify({
+        type: 'FULL_SNAPSHOT',
+        senderId: this._clientId,
+        ts: now,
+        store,
+        keyTimestamps
+      });
+      await fetch(`${this._cloudBaseUrl}/${this._cloudTopic}`, {
+        method: 'POST',
+        headers: { 'Filename': `snapshot_${now}.json` },
+        body: bodyStr
+      });
+    } catch {}
+  },
+
+  pushKeyToCloud(key, value, ts) {
+    if (this._cloudPushTimers[key]) {
+      clearTimeout(this._cloudPushTimers[key]);
+    }
+    this._cloudPushTimers[key] = setTimeout(async () => {
+      delete this._cloudPushTimers[key];
+      try {
+        const latestVal = DB.get(key);
+        const latestTs = DB.getKeyTs(key) || ts || Date.now();
+        const eventObj = {
+          senderId: this._clientId,
+          type: 'DATA_UPDATED',
+          event: 'DATA_UPDATED',
+          data: { key },
+          payload: { key },
+          ts: latestTs
+        };
+        const bodyStr = JSON.stringify({
+          type: 'KEY_UPDATE',
+          senderId: this._clientId,
+          key,
+          value: latestVal,
+          ts: latestTs,
+          event: eventObj
+        });
+
+        // Fast path 1: <= 3500 bytes -> 1 single inline SSE packet (~100ms)
+        if (bodyStr.length <= 3500) {
+          await fetch(`${this._cloudBaseUrl}/${this._cloudTopic}`, {
+            method: 'POST',
+            body: bodyStr
+          });
+          return;
+        }
+
+        // Fast path 2: 3501..28000 bytes -> parallel inline SSE chunks (~150ms, no attachment download lag!)
+        if (bodyStr.length <= 28000) {
+          const chunkSize = 3100;
+          const total = Math.ceil(bodyStr.length / chunkSize);
+          const chunkId = `${key}_${latestTs}_${Math.random().toString(36).slice(2, 6)}`;
+          for (let i = 0; i < total; i++) {
+            const slice = bodyStr.slice(i * chunkSize, (i + 1) * chunkSize);
+            const chunkMsg = JSON.stringify({
+              type: 'KEY_CHUNK',
+              senderId: this._clientId,
+              chunkId,
+              idx: i,
+              total,
+              data: slice,
+              ts: latestTs
+            });
+            await fetch(`${this._cloudBaseUrl}/${this._cloudTopic}`, {
+              method: 'POST',
+              body: chunkMsg
+            });
+          }
+          return;
+        }
+
+        // Fallback for very large payloads (>28KB): send as file attachment
+        await fetch(`${this._cloudBaseUrl}/${this._cloudTopic}`, {
+          method: 'POST',
+          headers: { 'Filename': `sync_${key}_${latestTs}.json` },
+          body: bodyStr
+        });
+      } catch {}
+    }, 50);
+  },
+
+  async pullFromServer(forceRefreshView = false) {
+    const now = Date.now();
+    // If local server is not running on this device, avoid spamming connection timeouts
+    if (!forceRefreshView && this._localServerFails >= 2 && (now - this._lastLocalAttempt) < 15000) {
+      return;
+    }
+    this._lastLocalAttempt = now;
+
+    try {
+      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = ctrl ? setTimeout(() => ctrl.abort(), 750) : null;
+      const res = await fetch(`${this._serverUrl}/api/sync?since=${this._lastServerVersion}`, {
+        method: 'GET',
+        cache: 'no-store',
+        signal: ctrl ? ctrl.signal : undefined
+      });
+      if (timer) clearTimeout(timer);
+      if (!res.ok) {
+        this._localServerFails++;
+        return;
+      }
+      this._localServerFails = 0;
       const json = await res.json();
       if (!json || !json.ok) return;
 
       if (json.changed && json.store) {
         const storeKeys = Object.keys(json.store);
         if (storeKeys.length === 0) {
-          // Server is empty or in initial collection window -> push our local data
           const localDump = {};
+          const keyTimestamps = {};
           Object.keys(DEFAULT_DATA).forEach(k => {
             localDump[k] = DB.get(k);
+            keyTimestamps[k] = DB.getKeyTs(k);
           });
           await fetch(`${this._serverUrl}/api/sync`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ store: localDump, onlyIfEmpty: true })
+            body: JSON.stringify({ store: localDump, keyTimestamps, onlyIfEmpty: true })
           });
         } else {
-          const wasFirstSync = (this._lastServerVersion === 0);
-          const serverModified = new Set(json.modifiedKeys || []);
+          const serverKeyTs = json.keyTimestamps || {};
           let anyChanged = false;
 
           storeKeys.forEach(k => {
             const valToStore = json.store[k];
-            const incomingStr = JSON.stringify(valToStore);
-            const currentStr = localStorage.getItem(DB._prefix + k);
-            const defaultStr = DEFAULT_DATA[k] !== undefined ? JSON.stringify(DEFAULT_DATA[k]) : null;
+            const incomingTs = serverKeyTs[k] || json.version || 0;
+            const localTs = DB.getKeyTs(k);
 
-            // If this is our first sync with the server and the server only has unedited baseline
-            // for key `k`, while this browser tab has local edits, push our local edit to the server!
-            if (
-              wasFirstSync &&
-              !serverModified.has(k) &&
-              currentStr &&
-              defaultStr &&
-              currentStr !== defaultStr &&
-              incomingStr === defaultStr
-            ) {
-              try {
-                this.pushKeyToServer(k, JSON.parse(currentStr));
-              } catch {}
+            if (localTs > incomingTs && incomingTs > 0) {
+              this.pushKeyToLocalServer(k, DB.get(k), localTs);
               return;
             }
 
+            const incomingStr = JSON.stringify(valToStore);
+            const currentStr = localStorage.getItem(DB._prefix + k);
             if (incomingStr !== currentStr) {
               localStorage.setItem(DB._prefix + k, incomingStr);
               anyChanged = true;
+            }
+            if (incomingTs > localTs) {
+              DB.setKeyTs(k, incomingTs);
             }
           });
           this._lastServerVersion = json.version || 0;
@@ -635,28 +936,43 @@ const RealtimeSync = {
           if (json.lastEvent && json.lastEvent.ts > this._lastEventTs && json.lastEvent.senderId !== this._clientId) {
             this._lastEventTs = json.lastEvent.ts;
             this._notify(json.lastEvent);
-          } else if (anyChanged || forceRefreshView) {
+          }
+          if (anyChanged || forceRefreshView) {
             this._refreshActiveViewIfIdle();
           }
         }
       }
     } catch {
-      // Offline / static file mode without server — localStorage & BroadcastChannel still work
+      this._localServerFails++;
     }
   },
 
-  async pushKeyToServer(key, value) {
+  async pushKeyToLocalServer(key, value, ts) {
+    if (this._localServerFails >= 3) return;
     try {
+      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = ctrl ? setTimeout(() => ctrl.abort(), 800) : null;
       const res = await fetch(`${this._serverUrl}/api/sync`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key, value, explicit: true })
+        body: JSON.stringify({ key, value, ts: ts || Date.now(), explicit: true }),
+        signal: ctrl ? ctrl.signal : undefined
       });
+      if (timer) clearTimeout(timer);
       if (res.ok) {
+        this._localServerFails = 0;
         const json = await res.json();
         if (json.version) this._lastServerVersion = json.version;
       }
-    } catch {}
+    } catch {
+      this._localServerFails++;
+    }
+  },
+
+  async pushKeyToServer(key, value, ts) {
+    const stamp = ts || Date.now();
+    this.pushKeyToLocalServer(key, value, stamp);
+    this.pushKeyToCloud(key, value, stamp);
   },
 
   _refreshActiveViewIfIdle() {
@@ -697,7 +1013,7 @@ const RealtimeSync = {
     }
   },
 
-  emit(eventType, data = {}) {
+  emit(eventType, data = {}, skipCloud = false) {
     const payload = {
       senderId: this._clientId,
       type: eventType,
@@ -716,7 +1032,7 @@ const RealtimeSync = {
       localStorage.setItem('tumbuh_rt_event', JSON.stringify(payload));
     } catch {}
 
-    // Also broadcast event to Cross-Profile Server
+    // Broadcast event to Local Server
     fetch(`${this._serverUrl}/api/sync`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -724,6 +1040,25 @@ const RealtimeSync = {
     }).then(r => r.json()).then(j => {
       if (j && j.version) this._lastServerVersion = j.version;
     }).catch(() => {});
+
+    // Broadcast standalone real-time events (e.g. wheel spin, quiz lock) to Cloud
+    if (!skipCloud && eventType !== 'DATA_UPDATED') {
+      if (this._cloudEventTimer) clearTimeout(this._cloudEventTimer);
+      this._cloudEventTimer = setTimeout(() => {
+        const bodyStr = JSON.stringify({
+          type: 'RT_EVENT',
+          senderId: this._clientId,
+          ts: payload.ts,
+          event: payload
+        });
+        const headers = bodyStr.length > 3500 ? { 'Filename': `evt_${payload.ts}.json` } : {};
+        fetch(`${this._cloudBaseUrl}/${this._cloudTopic}`, {
+          method: 'POST',
+          headers,
+          body: bodyStr
+        }).catch(() => {});
+      }, 150);
+    }
   },
 
   subscribe(callback) {
@@ -752,7 +1087,7 @@ const RealtimeSync = {
   }
 };
 
-// ── IndexedDB + Cross-Profile Server Media Store for Large Local Files (Video/PDF/Images) ──
+// ── IndexedDB + Local Server + 24/7 Cloud Media Store for Large Files (Video/PDF/Images) ──
 const MediaDB = {
   _dbName: 'PetualanganTumbuhMediaDB',
   _storeName: 'files',
@@ -778,9 +1113,32 @@ const MediaDB = {
     const db = await this._open();
     const id = 'media_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
 
-    // Also upload to Cross-Profile Sync Server so other Chrome emails/browsers can play the Video/PDF
+    // 1. Immediately store into local IndexedDB (instant response in ~5ms!)
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(this._storeName, 'readwrite');
+      const store = tx.objectStore(this._storeName);
+      store.put({
+        id,
+        name: file.name,
+        type: file.type || 'application/octet-stream',
+        size: file.size,
+        blob: file,
+        createdAt: new Date().toISOString()
+      });
+      tx.oncomplete = () => resolve();
+      tx.onerror = (e) => reject(e.target.error);
+    });
+
+    // 2. Dispatch background server & cloud uploads (non-blocking, keeps UI super fast!)
+    this._uploadInBackground(id, file);
+
+    return { id, name: file.name, type: file.type || 'application/octet-stream', size: file.size };
+  },
+
+  _uploadInBackground(id, file) {
+    // A. Local Sync Server (instant on same machine/LAN)
     try {
-      await fetch(`${RealtimeSync._serverUrl}/api/media/${id}`, {
+      fetch(`${RealtimeSync._serverUrl}/api/media/${id}`, {
         method: 'POST',
         headers: {
           'Content-Type': file.type || 'application/octet-stream',
@@ -788,30 +1146,43 @@ const MediaDB = {
           'X-File-Type': file.type || 'application/octet-stream'
         },
         body: file
-      });
+      }).catch(() => {});
     } catch {}
 
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(this._storeName, 'readwrite');
-      const store = tx.objectStore(this._storeName);
-      store.put({
-        id,
-        name: file.name,
-        type: file.type,
-        size: file.size,
-        blob: file,
-        createdAt: new Date().toISOString()
-      });
-      tx.oncomplete = () => resolve({ id, name: file.name, type: file.type, size: file.size });
-      tx.onerror = (e) => reject(e.target.error);
-    });
+    // B. 24/7 Cloud Media Upload (in background for other remote devices/phones)
+    if (file.size <= 15 * 1024 * 1024) {
+      setTimeout(async () => {
+        try {
+          const safeName = (file.name || id).replace(/[^a-zA-Z0-9._-]/g, '_');
+          const cloudRes = await fetch(`${RealtimeSync._cloudBaseUrl}/${RealtimeSync._cloudMediaTopic}`, {
+            method: 'POST',
+            headers: { 'Filename': safeName },
+            body: file
+          });
+          if (cloudRes.ok) {
+            const cloudJson = await cloudRes.json();
+            const attUrl = cloudJson?.attachment?.url;
+            if (attUrl) {
+              const map = DB.get('cloudMediaMap') || {};
+              map[id] = {
+                id,
+                url: attUrl,
+                name: file.name,
+                type: file.type || 'application/octet-stream',
+                size: file.size
+              };
+              DB.set('cloudMediaMap', map);
+            }
+          }
+        } catch {}
+      }, 50);
+    }
   },
 
   async getFileUrl(id) {
     if (!id) return null;
-    const mediaUrl = `${RealtimeSync._serverUrl}/api/media/${id}`;
 
-    // 1. Check local IndexedDB first
+    // 1. Check local IndexedDB first (0ms instant!)
     let localRecord = null;
     try {
       const db = await this._open();
@@ -824,38 +1195,6 @@ const MediaDB = {
       });
     } catch {}
 
-    // 2. Check if Sync Server is reachable & has the file (or push localRecord to server)
-    try {
-      const check = await fetch(mediaUrl, { method: 'HEAD' });
-      if (check.ok) {
-        const serverName = check.headers.get('X-File-Name');
-        return {
-          url: mediaUrl,
-          blobUrl: localRecord?.blob ? URL.createObjectURL(localRecord.blob) : mediaUrl,
-          name: localRecord?.name || (serverName ? decodeURIComponent(serverName) : id),
-          type: localRecord?.type || check.headers.get('Content-Type') || 'application/octet-stream'
-        };
-      } else if (localRecord?.blob) {
-        // Server is running but doesn't have this file yet -> upload it now
-        await fetch(mediaUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': localRecord.type || 'application/octet-stream',
-            'X-File-Name': encodeURIComponent(localRecord.name || id),
-            'X-File-Type': localRecord.type || 'application/octet-stream'
-          },
-          body: localRecord.blob
-        });
-        return {
-          url: mediaUrl,
-          blobUrl: URL.createObjectURL(localRecord.blob),
-          name: localRecord.name,
-          type: localRecord.type
-        };
-      }
-    } catch {}
-
-    // 3. Offline / file:// fallback using local IndexedDB blob
     if (localRecord && localRecord.blob) {
       const mime = localRecord.type || (localRecord.name?.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'video/mp4');
       const typedBlob = new Blob([localRecord.blob], { type: mime });
@@ -875,6 +1214,52 @@ const MediaDB = {
       }
 
       return { url: blobUrl, blobUrl, name: localRecord.name, type: mime };
+    }
+
+    // 2. Check Local Sync Server with fast 600ms timeout
+    const mediaUrl = `${RealtimeSync._serverUrl}/api/media/${id}`;
+    try {
+      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const t = ctrl ? setTimeout(() => ctrl.abort(), 600) : null;
+      const check = await fetch(mediaUrl, { method: 'HEAD', signal: ctrl ? ctrl.signal : undefined });
+      if (t) clearTimeout(t);
+      if (check.ok) {
+        const serverName = check.headers.get('X-File-Name');
+        return {
+          url: mediaUrl,
+          blobUrl: mediaUrl,
+          name: serverName ? decodeURIComponent(serverName) : id,
+          type: check.headers.get('Content-Type') || 'application/octet-stream'
+        };
+      }
+    } catch {}
+
+    // 3. Check 24/7 Cloud Media Map (for other devices/phones/laptops)
+    const cloudMap = DB.get('cloudMediaMap') || {};
+    const cloudEntry = cloudMap[id];
+    if (cloudEntry && cloudEntry.url) {
+      try {
+        const resp = await fetch(cloudEntry.url);
+        if (resp.ok) {
+          const rawBlob = await resp.blob();
+          const mime = cloudEntry.type || (cloudEntry.name?.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'video/mp4');
+          const typedBlob = new Blob([rawBlob], { type: mime });
+          try {
+            const db = await this._open();
+            const tx = db.transaction(this._storeName, 'readwrite');
+            tx.objectStore(this._storeName).put({
+              id,
+              name: cloudEntry.name || id,
+              type: mime,
+              size: typedBlob.size,
+              blob: typedBlob,
+              createdAt: new Date().toISOString()
+            });
+          } catch {}
+          const blobUrl = URL.createObjectURL(typedBlob);
+          return { url: blobUrl, blobUrl, name: cloudEntry.name || id, type: mime };
+        }
+      } catch {}
     }
 
     return null;
@@ -901,27 +1286,32 @@ const MediaDB = {
 // ── Data Manager ──────────────────────────────────────────────
 const DB = {
   _prefix: 'tumbuh_',
+  _tsPrefix: 'tumbuh_ts_',
+
+  getKeyTs(key) {
+    try {
+      return parseInt(localStorage.getItem(this._tsPrefix + key) || '0', 10) || 0;
+    } catch { return 0; }
+  },
+
+  setKeyTs(key, ts) {
+    try {
+      localStorage.setItem(this._tsPrefix + key, String(ts || 0));
+    } catch {}
+  },
 
   init() {
-    // Merge restored snapshot for Dea Natasya into DEFAULT_DATA & restore localStorage if needed
+    // Merge restored snapshot for Dea Natasya into DEFAULT_DATA & initialize baseline
     if (typeof window !== 'undefined' && window.RESTORED_DEA_DATA) {
       Object.keys(window.RESTORED_DEA_DATA).forEach(k => {
         DEFAULT_DATA[k] = window.RESTORED_DEA_DATA[k];
       });
-      if (!localStorage.getItem('tumbuh_restored_dea_v4')) {
-        Object.keys(window.RESTORED_DEA_DATA).forEach(k => {
-          if (!localStorage.getItem(this._prefix + k)) {
-            localStorage.setItem(this._prefix + k, JSON.stringify(window.RESTORED_DEA_DATA[k]));
-          }
+      if (!localStorage.getItem('tumbuh_clean_v11')) {
+        Object.keys(DEFAULT_DATA).forEach(k => {
+          localStorage.setItem(this._prefix + k, JSON.stringify(DEFAULT_DATA[k]));
+          this.setKeyTs(k, 0);
         });
-        localStorage.setItem('tumbuh_restored_dea_v4', '1');
-      }
-      if (!localStorage.getItem('tumbuh_pos2_clean_v8')) {
-        if (!localStorage.getItem(this._prefix + 'pos2State')) {
-          const cleanPos2 = { turnOrder: [], activeGroupId: null, assignments: {}, lkk: {} };
-          localStorage.setItem(this._prefix + 'pos2State', JSON.stringify(cleanPos2));
-        }
-        localStorage.setItem('tumbuh_pos2_clean_v8', '1');
+        localStorage.setItem('tumbuh_clean_v11', '1');
       }
     }
 
@@ -992,6 +1382,84 @@ const DB = {
       localStorage.setItem(this._prefix + 'tantanganAkhir', JSON.stringify(ta));
     }
 
+    // Backfill materials history from topics & cases so past uploads always appear in history
+    const existingMaterials = this.get('materials') || [];
+    let matChanged = false;
+    const currentTopics = this.get('topics') || [];
+    currentTopics.forEach(t => {
+      if (t.pdfMediaId && !existingMaterials.some(m => m.pdfMediaId === t.pdfMediaId)) {
+        existingMaterials.push({
+          id: 'm_auto_' + t.id + '_pdf',
+          title: `${t.title} (${t.pdfFileName || 'Dokumen PDF'})`,
+          type: 'pdf',
+          topicId: t.id,
+          topicTitle: t.title,
+          pdfMediaId: t.pdfMediaId,
+          fileName: t.pdfFileName || 'Dokumen.pdf',
+          fileSize: 'Modul PDF',
+          guruId: 'u2',
+          uploaderName: 'Dea Natasya',
+          createdAt: new Date().toISOString()
+        });
+        matChanged = true;
+      }
+      if (t.videoMediaId && !existingMaterials.some(m => m.videoMediaId === t.videoMediaId)) {
+        existingMaterials.push({
+          id: 'm_auto_' + t.id + '_video',
+          title: `${t.title} (${t.videoFileName || 'Video MP4'})`,
+          type: 'video',
+          topicId: t.id,
+          topicTitle: t.title,
+          videoMediaId: t.videoMediaId,
+          fileName: t.videoFileName || 'Video.mp4',
+          fileSize: 'Video Lokal',
+          guruId: 'u2',
+          uploaderName: 'Dea Natasya',
+          createdAt: new Date().toISOString()
+        });
+        matChanged = true;
+      }
+      if (t.videoUrl && !t.videoMediaId && !existingMaterials.some(m => m.url === t.videoUrl)) {
+        existingMaterials.push({
+          id: 'm_auto_' + t.id + '_url',
+          title: `${t.title} (Tautan Video YouTube)`,
+          type: 'link',
+          topicId: t.id,
+          topicTitle: t.title,
+          url: t.videoUrl,
+          fileName: t.videoUrl,
+          fileSize: 'Tautan YouTube',
+          guruId: 'u2',
+          uploaderName: 'Dea Natasya',
+          createdAt: new Date().toISOString()
+        });
+        matChanged = true;
+      }
+    });
+
+    const currentCases = this.get('cases') || [];
+    currentCases.forEach(c => {
+      if (c.imageData && !existingMaterials.some(m => m.caseId === c.id)) {
+        existingMaterials.push({
+          id: 'm_auto_case_' + c.id,
+          title: `Gambar Studi Kasus: ${c.title}`,
+          type: 'image',
+          caseId: c.id,
+          imageData: c.imageData,
+          fileName: `${c.title}.png`,
+          fileSize: 'Gambar JPG/PNG',
+          guruId: 'u2',
+          uploaderName: 'Dea Natasya',
+          createdAt: new Date().toISOString()
+        });
+        matChanged = true;
+      }
+    });
+
+    if (matChanged) {
+      localStorage.setItem(this._prefix + 'materials', JSON.stringify(existingMaterials));
+    }
+
     RealtimeSync.init();
   },
 
@@ -1003,20 +1471,27 @@ const DB = {
   },
 
   set(key, value) {
+    const ts = Date.now();
     localStorage.setItem(this._prefix + key, JSON.stringify(value));
-    RealtimeSync.pushKeyToServer(key, value);
-    RealtimeSync.emit('DATA_UPDATED', { key });
+    this.setKeyTs(key, ts);
+    RealtimeSync.pushKeyToServer(key, value, ts);
+    RealtimeSync.emit('DATA_UPDATED', { key, ts }, false);
   },
 
   reset() {
     Object.keys(DEFAULT_DATA).forEach(key => {
       localStorage.removeItem(this._prefix + key);
+      this.setKeyTs(key, 0);
     });
     localStorage.removeItem(this._prefix + 'pos4Shared');
     MediaDB.clearAll();
     fetch(`${RealtimeSync._serverUrl}/api/reset`, { method: 'POST' }).catch(() => {});
+    fetch(`${RealtimeSync._cloudBaseUrl}/${RealtimeSync._cloudTopic}`, {
+      method: 'POST',
+      body: JSON.stringify({ type: 'SYSTEM_RESET', senderId: RealtimeSync._clientId, ts: Date.now() })
+    }).catch(() => {});
     this.init();
-    RealtimeSync.emit('SYSTEM_RESET', {});
+    RealtimeSync.emit('SYSTEM_RESET', {}, true);
   },
 
   // Users
@@ -1552,11 +2027,82 @@ const DB = {
     RealtimeSync.emit('POS4_UPDATED', merged);
   },
 
+  extractYouTubeId(url) {
+    if (!url) return null;
+    url = String(url).trim();
+    const iframeSrc = url.match(/src=["']([^"']+)["']/i);
+    if (iframeSrc) url = iframeSrc[1];
+    if (url.length === 11 && /^[a-zA-Z0-9_-]{11}$/.test(url)) return url;
+    const m = url.match(/(?:embed\/|v\/|watch\?v=|youtu\.be\/|shorts\/|live\/)([a-zA-Z0-9_-]{11})/);
+    return m ? m[1] : null;
+  },
+
+  toEmbedUrl(url) {
+    if (!url) return '';
+    url = String(url).trim();
+    const id = this.extractYouTubeId(url);
+    if (id) {
+      return `https://www.youtube.com/embed/${id}`;
+    }
+    if (url.includes('drive.google.com/file/d/')) {
+      return url.replace(/\/view(?:\?.*)?$/, '/preview');
+    }
+    return url;
+  },
+
+  getVideoPlayerSrc(url, autoplay = true) {
+    if (!url) return '';
+    url = String(url).trim();
+    const id = this.extractYouTubeId(url);
+    const ap = autoplay ? '1' : '0';
+    if (id) {
+      if (typeof window !== 'undefined' && window.location) {
+        if (window.location.protocol === 'file:') {
+          // When running via file://, route through local server player proxy to provide valid HTTP origin and eliminate Error 153
+          return `http://127.0.0.1:8765/player?id=${id}&autoplay=${ap}`;
+        }
+        if (window.location.port === '8765' || window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost') {
+          return `/player?id=${id}&autoplay=${ap}`;
+        }
+      }
+      return `https://www.youtube.com/embed/${id}?autoplay=${ap}&rel=0&modestbranding=1&enablejsapi=1`;
+    }
+    if (url.includes('drive.google.com/file/d/')) {
+      return url.replace(/\/view(?:\?.*)?$/, '/preview');
+    }
+    return url;
+  },
+
+  toWatchUrl(url) {
+    if (!url) return '';
+    url = String(url).trim();
+    const id = this.extractYouTubeId(url);
+    if (id) {
+      return `https://www.youtube.com/watch?v=${id}`;
+    }
+    return url;
+  },
+
   // Topics (Pos 1)
   getTopics()         { return this.get('topics'); },
-  saveTopics(topics)  { this.set('topics', topics); },
-  addTopic(t)         { const ts = this.getTopics(); t.id = t.id || ('t' + Date.now()); ts.push(t); this.saveTopics(ts); return t; },
-  updateTopic(id, d)  { const ts = this.getTopics().map(t => t.id === id ? { ...t, ...d } : t); this.saveTopics(ts); },
+  saveTopics(topics)  {
+    this.set('topics', topics);
+    RealtimeSync.emit('TOPICS_UPDATED', { topics }, false);
+  },
+  addTopic(t)         {
+    const ts = this.getTopics();
+    t.id = t.id || ('t' + Date.now());
+    if (t.videoUrl) t.videoUrl = this.toEmbedUrl(t.videoUrl);
+    ts.push(t);
+    this.saveTopics(ts);
+    return t;
+  },
+  updateTopic(id, d)  {
+    const updates = { ...d };
+    if (updates.videoUrl) updates.videoUrl = this.toEmbedUrl(updates.videoUrl);
+    const ts = this.getTopics().map(t => t.id === id ? { ...t, ...updates } : t);
+    this.saveTopics(ts);
+  },
   deleteTopic(id)     { this.saveTopics(this.getTopics().filter(t => t.id !== id)); },
 
   // Cases (Pos 2)
@@ -1580,10 +2126,26 @@ const DB = {
     this.set('scores', scores);
   },
 
-  // Materials
-  getMaterials()      { return this.get('materials'); },
-  addMaterial(m)      { const ms = this.getMaterials(); m.id = 'm' + Date.now(); m.createdAt = new Date().toISOString(); ms.push(m); this.set('materials', ms); return m; },
-  deleteMaterial(id)  { this.set('materials', this.getMaterials().filter(m => m.id !== id)); },
+  // Materials (Riwayat Unggahan File PDF, Video, Link, & Gambar)
+  getMaterials()      { return this.get('materials') || []; },
+  addMaterial(m)      {
+    const ms = [...this.getMaterials()];
+    m.id = m.id || ('m' + Date.now() + '_' + Math.random().toString(36).slice(2, 6));
+    m.createdAt = m.createdAt || new Date().toISOString();
+    if (m.type === 'link' || m.url) {
+      m.watchUrl = this.toWatchUrl(m.watchUrl || m.url);
+      m.url = this.toEmbedUrl(m.url || m.watchUrl);
+    }
+    ms.unshift(m); // unshift so newest uploaded material always shows at the very top of history!
+    this.set('materials', ms);
+    RealtimeSync.emit('MATERIALS_UPDATED', { materials: ms }, false);
+    return m;
+  },
+  deleteMaterial(id)  {
+    const ms = this.getMaterials().filter(m => m.id !== id);
+    this.set('materials', ms);
+    RealtimeSync.emit('MATERIALS_UPDATED', { materials: ms }, false);
+  },
 
   // Settings
   getSettings()       { return this.get('settings'); },
