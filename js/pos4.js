@@ -77,9 +77,12 @@ const Pos4View = {
   render() {
     const user = Auth.getCurrentUser();
     const scores = user ? DB.getScoreByUser(user.id) : {};
+    const shared = DB.getPos4Shared();
 
-    this._currentScreen = scores.pos4?.currentScreen || 0;
-    this._answers = scores.pos4?.answers || {};
+    this._currentScreen = scores.pos4?.currentScreen !== undefined
+      ? scores.pos4.currentScreen
+      : (shared.currentScreen || 0);
+    this._answers = { ...(shared.answers || {}), ...(scores.pos4?.answers || {}) };
 
     const el = document.getElementById('view-pos4');
     el.innerHTML = `
@@ -201,7 +204,7 @@ const Pos4View = {
     const wcEl = document.getElementById(`wc-${screenId}`);
     if (wcEl) wcEl.textContent = `${val.split(' ').filter(w=>w).length} kata`;
 
-    // Save to DB
+    // Save to DB (both per-user and shared so switching emails/accounts stays updated)
     const user = Auth.getCurrentUser();
     if (user?.role === 'murid') {
       DB.saveScore(user.id, 'pos4', {
@@ -210,6 +213,24 @@ const Pos4View = {
         completed: false,
       });
     }
+    DB.savePos4Shared({
+      answers: this._answers,
+      currentScreen: this._currentScreen
+    });
+  },
+
+  _syncInPlaceOrRender() {
+    const shared = DB.getPos4Shared();
+    const user = Auth.getCurrentUser();
+    const scores = user ? DB.getScoreByUser(user.id) : {};
+    const merged = { ...(shared.answers || {}), ...(scores.pos4?.answers || {}) };
+    this._answers = merged;
+    this._screens.forEach(s => {
+      const ta = document.getElementById(`pos4-answer-${s.id}`);
+      if (ta && document.activeElement !== ta && merged[s.id] !== undefined && ta.value !== merged[s.id]) {
+        ta.value = merged[s.id];
+      }
+    });
   },
 
   goToScreen(idx) {
@@ -300,13 +321,15 @@ const Pos4View = {
     }
 
     const user = Auth.getCurrentUser();
+    const pos4Data = {
+      answers: this._answers,
+      currentScreen: this._totalScreens - 1,
+      completed: true,
+      completedAt: new Date().toISOString(),
+    };
+    DB.savePos4Shared(pos4Data);
     if (user?.role === 'murid') {
-      DB.saveScore(user.id, 'pos4', {
-        answers: this._answers,
-        currentScreen: this._totalScreens - 1,
-        completed: true,
-        completedAt: new Date().toISOString(),
-      });
+      DB.saveScore(user.id, 'pos4', pos4Data);
       MuridView.addPoin(user.id, 30);
       MuridView.awardBadge(user.id, 'pos4_done');
 

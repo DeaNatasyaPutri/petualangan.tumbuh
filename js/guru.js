@@ -1115,44 +1115,60 @@ const GuruView = {
   },
 
   _renderKuisKelompokManager(questions) {
+    const kkQType = this._newKKQType || 'pg';
     return `
       <div class="materi-upload-card">
-        <h3>➕ Tambah Soal Baru — Kuis Kelompok (Kuis Kejutan)</h3>
-        <p class="form-hint">💡 Pada Kuis Kelompok, setiap soal yang ditayangkan akan menampilkan hitung mundur visual 15 detik sebelum pilihan jawaban A-D muncul di layar.</p>
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+          <h3>➕ Tambah Soal Baru — Kuis Kelompok (Kuis Kejutan)</h3>
+          <div class="materi-type-tabs" style="margin-bottom:0">
+            <button class="ai-src-btn ${kkQType === 'pg' ? 'active' : ''}" onclick="GuruView.setNewKKQType('pg')">🔘 Soal Pilihan Ganda</button>
+            <button class="ai-src-btn ${kkQType === 'esai' ? 'active' : ''}" onclick="GuruView.setNewKKQType('esai')">✍️ Soal Esai</button>
+          </div>
+        </div>
+        <p class="form-hint">💡 Pada Kuis Kelompok, setiap soal menampilkan hitung mundur visual 15 detik di bagian atas layar.</p>
 
         <div class="ai-config-row">
           <div class="form-group">
-            <label class="form-label">Pertanyaan Kompetisi Kelompok</label>
+            <label class="form-label">Pertanyaan Kompetisi Kelompok (${kkQType === 'pg' ? 'Pilihan Ganda' : 'Esai'})</label>
             <textarea class="form-input" id="kk-new-q" rows="2" placeholder="Tulis pertanyaan kuis kelompok..."></textarea>
           </div>
           <div class="form-group">
-            <label class="form-label">Babak Kompetisi & Kunci Jawaban</label>
+            <label class="form-label">Babak Kompetisi ${kkQType === 'pg' ? '& Kunci Jawaban' : ''}</label>
             <div style="display:flex;gap:10px">
               <select class="form-input" id="kk-new-babak">
-                <option value="utama">🔵 Babak Utama</option>
-                <option value="penentuan">🔴 Babak Penentuan</option>
+                <option value="utama" ${kkQType === 'pg' ? 'selected' : ''}>🔵 Babak Utama</option>
+                <option value="penentuan" ${kkQType === 'esai' ? 'selected' : ''}>🔴 Babak Penentuan</option>
               </select>
-              <select class="form-input" id="kk-new-ans">
-                <option value="0">Kunci: A</option>
-                <option value="1">Kunci: B</option>
-                <option value="2">Kunci: C</option>
-                <option value="3">Kunci: D</option>
-              </select>
+              ${kkQType === 'pg' ? `
+                <select class="form-input" id="kk-new-ans">
+                  <option value="0">Kunci: A</option>
+                  <option value="1">Kunci: B</option>
+                  <option value="2">Kunci: C</option>
+                  <option value="3">Kunci: D</option>
+                </select>
+              ` : ''}
             </div>
           </div>
         </div>
 
-        <div class="ai-config-row">
-          <div class="form-group"><label class="form-label">Pilihan A</label><input class="form-input" id="kk-opt-0"></div>
-          <div class="form-group"><label class="form-label">Pilihan B</label><input class="form-input" id="kk-opt-1"></div>
-          <div class="form-group"><label class="form-label">Pilihan C</label><input class="form-input" id="kk-opt-2"></div>
-          <div class="form-group"><label class="form-label">Pilihan D</label><input class="form-input" id="kk-opt-3"></div>
-        </div>
+        ${kkQType === 'pg' ? `
+          <div class="ai-config-row">
+            <div class="form-group"><label class="form-label">Pilihan A</label><input class="form-input" id="kk-opt-0"></div>
+            <div class="form-group"><label class="form-label">Pilihan B</label><input class="form-input" id="kk-opt-1"></div>
+            <div class="form-group"><label class="form-label">Pilihan C</label><input class="form-input" id="kk-opt-2"></div>
+            <div class="form-group"><label class="form-label">Pilihan D</label><input class="form-input" id="kk-opt-3"></div>
+          </div>
 
-        <div class="form-group">
-          <label class="form-label">Penjelasan Jawaban Benar</label>
-          <input class="form-input" id="kk-new-exp" placeholder="Penjelasan singkat yang muncul setelah soal dijawab...">
-        </div>
+          <div class="form-group">
+            <label class="form-label">Penjelasan Jawaban Benar</label>
+            <input class="form-input" id="kk-new-exp" placeholder="Penjelasan singkat yang muncul setelah soal dijawab...">
+          </div>
+        ` : `
+          <div class="form-group">
+            <label class="form-label">Kunci Jawaban Esai</label>
+            <textarea class="form-input" id="kk-new-kunci-esai" rows="2" placeholder="Tulis kunci jawaban esai kelompok..."></textarea>
+          </div>
+        `}
 
         <div>
           <button class="btn-primary" onclick="GuruView.addKuisKelompokQuestion()">💾 Tambahkan ke Kuis Kelompok</button>
@@ -1163,14 +1179,16 @@ const GuruView = {
       <div class="materials-list">
         ${questions.map((q, idx) => `
           <div class="material-card">
-            <div class="ai-q-num">${idx + 1}</div>
+            <div class="ai-q-num" style="background:${q.type === 'esai' ? '#8E24AA' : '#1565C0'}">${idx + 1}</div>
             <div class="material-info">
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
                 <span class="q-babak badge-${q.babak}">${q.babak === 'utama' ? '🔵 Babak Utama' : '🔴 Babak Penentuan'}</span>
-                <span class="badge-pending">⏳ Pilihan muncul setelah 15 detik</span>
+                <span class="badge-pending">${q.type === 'esai' ? '✍️ Soal Esai' : '🔘 Pilihan Ganda'}</span>
               </div>
-              <strong>${q.pertanyaan}</strong>
-              <small>Pilihan: ${(q.pilihan || []).map((p, pi) => `${'ABCD'[pi]}. ${p}${pi === q.jawaban ? ' ✅' : ''}`).join(' | ')}</small>
+              <strong style="white-space:pre-line">${q.pertanyaan}</strong>
+              ${q.type === 'esai'
+                ? `<small style="color:#2E7D32">🔑 Kunci Jawaban: ${q.kunciEsai || q.penjelasan || '-'}</small>`
+                : `<small>Pilihan: ${(q.pilihan || []).map((p, pi) => `${'ABCD'[pi]}. ${p}${pi === q.jawaban ? ' ✅' : ''}`).join(' | ')}</small>`}
             </div>
             <button class="btn-icon del" onclick="GuruView.deleteKuisKelompokQuestion('${q.id}')">🗑️</button>
           </div>
@@ -1179,28 +1197,59 @@ const GuruView = {
     `;
   },
 
+  setNewKKQType(type) {
+    this._newKKQType = type;
+    this.render('kuis');
+  },
+
   addKuisKelompokQuestion() {
+    const kkQType = this._newKKQType || 'pg';
     const pertanyaan = document.getElementById('kk-new-q').value.trim();
     const babak = document.getElementById('kk-new-babak').value;
-    const jawaban = parseInt(document.getElementById('kk-new-ans').value) || 0;
-    const penjelasan = document.getElementById('kk-new-exp').value.trim();
-    const pilihan = [0,1,2,3].map(i => document.getElementById(`kk-opt-${i}`).value.trim());
-
-    if (!pertanyaan || pilihan.some(p => !p)) {
-      App.showToast('Pertanyaan dan keempat pilihan jawaban wajib diisi!', 'error');
+    if (!pertanyaan) {
+      App.showToast('Pertanyaan soal wajib diisi!', 'error');
       return;
     }
 
     const list = DB.getKuisKejutan();
-    list.push({
-      id: 'kk_' + Date.now(),
-      no: list.length + 1,
-      babak,
-      pertanyaan,
-      pilihan,
-      jawaban,
-      penjelasan
-    });
+    if (kkQType === 'esai') {
+      const kunciEsai = document.getElementById('kk-new-kunci-esai')?.value.trim() || '';
+      if (!kunciEsai) {
+        App.showToast('Kunci jawaban esai wajib diisi!', 'error');
+        return;
+      }
+      list.push({
+        id: 'kk_' + Date.now(),
+        no: list.length + 1,
+        babak,
+        type: 'esai',
+        pertanyaan,
+        kunciEsai,
+        penjelasan: kunciEsai,
+        kataKunci: kunciEsai.toLowerCase().split(/[\s,.;]+/).filter(w => w.length >= 4)
+      });
+    } else {
+      const jawaban = parseInt(document.getElementById('kk-new-ans').value) || 0;
+      const penjelasan = document.getElementById('kk-new-exp').value.trim();
+      const pilihan = [0,1,2,3].map(i => document.getElementById(`kk-opt-${i}`).value.trim());
+
+      if (pilihan.some(p => !p)) {
+        App.showToast('Pertanyaan dan keempat pilihan jawaban wajib diisi!', 'error');
+        return;
+      }
+
+      list.push({
+        id: 'kk_' + Date.now(),
+        no: list.length + 1,
+        babak,
+        type: 'pg',
+        pertanyaan,
+        pilihan,
+        jawaban,
+        penjelasan
+      });
+    }
+
     DB.saveKuisKejutan(list);
     App.showToast('Soal Kuis Kelompok berhasil ditambahkan!', 'success');
     this.render('kuis');

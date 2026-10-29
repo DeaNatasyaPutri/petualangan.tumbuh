@@ -11,12 +11,9 @@ const App = {
     if (typeof SoundManager !== 'undefined') SoundManager.init();
     this._setupGlobalEvents();
 
-    const user = Auth.getCurrentUser();
-    if (user) {
-      this.navigate('dashboard');
-    } else {
-      this.navigate('login');
-    }
+    // Always start at the login screen when first opening/entering the link
+    Auth.clearSession();
+    this.navigate('login');
   },
 
   // ── Router ────────────────────────────────────────────────
@@ -118,6 +115,23 @@ const App = {
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') this.closeModal();
     });
+
+    // Global cross-tab / cross-profile sync listener for non-active-input views
+    if (typeof RealtimeSync !== 'undefined' && typeof RealtimeSync.subscribe === 'function') {
+      RealtimeSync.subscribe((msg) => {
+        const activeTag = document.activeElement?.tagName;
+        const isTyping = activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT';
+        const hasModal = !!document.getElementById('modal-backdrop');
+        if (isTyping || hasModal) return;
+
+        const evt = msg.event || msg.type;
+        if (['USERS_UPDATED', 'GROUPS_UPDATED', 'CONTENT_UPDATED', 'MATERIALS_UPDATED', 'SCORES_UPDATED', 'SETTINGS_UPDATED', 'STORAGE_UPDATED', 'DATA_UPDATED'].includes(evt)) {
+          if (this.currentView === 'murid') MuridView.render();
+          else if (this.currentView === 'pos1') Pos1View.render();
+          else if (this.currentView === 'admin') AdminView.render(AdminView._currentTab || 'overview');
+        }
+      });
+    }
   },
 
   // ── Modal System ──────────────────────────────────────────
@@ -381,25 +395,25 @@ const LoginView = {
             <div class="login-hint-wrap" id="login-hints">
               <p class="login-hint-title">💡 Akun Demo (Buka beberapa Tab untuk uji Real-Time Kelompok):</p>
               <div class="login-hints-grid" id="hints-grid">
-                <div class="hint-card" onclick="LoginView.fillCreds('guru1','guru123')">
+                <div class="hint-card" onclick="LoginView.fillCreds('Dea Natasya','Deanatasya')">
                   <span class="hint-icon">👩‍🏫</span>
-                  <div><strong>Guru</strong><br><small>guru1 / guru123</small></div>
+                  <div><strong>Guru (Dea Natasya)</strong><br><small>Dea Natasya / Deanatasya</small></div>
                 </div>
-                <div class="hint-card" onclick="LoginView.fillCreds('murid1','murid123')">
-                  <span class="hint-icon">🌱</span>
-                  <div><strong>Murid 1 (Kel. 1)</strong><br><small>murid1 / murid123</small></div>
-                </div>
-                <div class="hint-card" onclick="LoginView.fillCreds('murid2','murid456')">
+                <div class="hint-card" onclick="LoginView.fillCreds('Adilla Nisa Ardani','murid123')">
                   <span class="hint-icon">🌸</span>
-                  <div><strong>Murid 2 (Kel. 1)</strong><br><small>murid2 / murid456</small></div>
+                  <div><strong>Murid (Kel. 1)</strong><br><small>Adilla Nisa Ardani / murid123</small></div>
                 </div>
-                <div class="hint-card" onclick="LoginView.fillCreds('murid3','murid789')">
-                  <span class="hint-icon">⭐</span>
-                  <div><strong>Murid 3 (Kel. 2)</strong><br><small>murid3 / murid789</small></div>
+                <div class="hint-card" onclick="LoginView.fillCreds('Fathimah Azzahra','murid123')">
+                  <span class="hint-icon">🌺</span>
+                  <div><strong>Murid (Kel. 1)</strong><br><small>Fathimah Azzahra / murid123</small></div>
                 </div>
-                <div class="hint-card" onclick="LoginView.fillCreds('murid5','murid123')">
-                  <span class="hint-icon">🦁</span>
-                  <div><strong>Murid 5 (Kel. 3)</strong><br><small>murid5 / murid123</small></div>
+                <div class="hint-card" onclick="LoginView.fillCreds('Anas Nurrayyan Alfaqih','murid123')">
+                  <span class="hint-icon">🌳</span>
+                  <div><strong>Murid (Kel. 2)</strong><br><small>Anas Nurrayyan Alfaqih / murid123</small></div>
+                </div>
+                <div class="hint-card" onclick="LoginView.fillCreds('Annisa Aulia Rahmi Ariyadi','murid123')">
+                  <span class="hint-icon">🌻</span>
+                  <div><strong>Murid (Kel. 3)</strong><br><small>Annisa Aulia Rahmi Ariyadi / murid123</small></div>
                 </div>
                 <div class="hint-card" onclick="LoginView.fillCreds('admin','admin123')">
                   <span class="hint-icon">🔑</span>

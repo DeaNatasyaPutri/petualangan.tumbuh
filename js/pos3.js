@@ -41,12 +41,23 @@ const Pos3View = {
         ? Auth.getCurrentGroup()
         : DB.getGroupById(this._guruSelectedGroupId || DB.getGroups()[0]?.id);
 
-      const { groupId, qIdx, optionIdx, userName, answerRecord, totalScore } = msg.payload || {};
+      const { groupId, qIdx, optionIdx, essayText, userName, answerRecord, totalScore } = msg.payload || {};
 
       // 1. Live Option Selection by a Group Member
       if (msg.event === 'POS3_OPTION_SELECTED') {
         if (myGroup && myGroup.id === groupId) {
           this._updateLiveGroupOptionUI(qIdx, optionIdx, userName);
+        }
+        if (user.role !== 'murid') {
+          this._refreshGuruLiveScoreboard();
+        }
+        return;
+      }
+
+      // 1b. Live Essay Typing by a Group Member
+      if (msg.event === 'POS3_ESSAY_TYPING') {
+        if (myGroup && myGroup.id === groupId) {
+          this._updateLiveGroupEssayUI(qIdx, essayText, userName);
         }
         if (user.role !== 'murid') {
           this._refreshGuruLiveScoreboard();
@@ -63,6 +74,9 @@ const Pos3View = {
           const questions = DB.getKuisKejutan();
           const q = questions[qIdx];
           if (q && answerRecord) {
+            const detailText = q.type === 'esai'
+              ? `Kunci Jawaban Esai: ${q.kunciEsai || q.penjelasan || '-'}`
+              : `Kunci Jawaban: ${'ABCD'[q.jawaban]}. ${q.pilihan[q.jawaban]}${q.penjelasan && !q.penjelasan.startsWith('Kunci Jawaban:') ? ' — ' + q.penjelasan : ''}`;
             App.showPointFeedback({
               groupName: `${myGroup.emoji || '👥'} ${myGroup.name}`,
               pointsEarned: answerRecord.points || 0,
@@ -70,7 +84,7 @@ const Pos3View = {
               isCorrect: !!answerRecord.isCorrect,
               title: answerRecord.isCorrect ? 'Jawaban Kelompok BENAR!' : 'Jawaban Kelompok Belum Tepat',
               subtitle: `Soal #${qIdx + 1} • Dikirim oleh ${answerRecord.submittedBy || 'Anggota Kelompok'}`,
-              detail: `Kunci Jawaban: ${'ABCD'[q.jawaban]}. ${q.pilihan[q.jawaban]}${q.penjelasan ? ' — ' + q.penjelasan : ''}`
+              detail: detailText
             });
           }
         }
@@ -251,6 +265,27 @@ const Pos3View = {
     }
   },
 
+  _syncInPlaceFromStorage() {
+    if (this._mode !== 'kelompok') return;
+    const user = Auth.getCurrentUser();
+    if (!user) return;
+    const myGroup = user.role === 'murid'
+      ? Auth.getCurrentGroup()
+      : DB.getGroupById(this._guruSelectedGroupId || DB.getGroups()[0]?.id);
+    if (!myGroup) return;
+    const gState = DB.getPos3ForGroup(myGroup.id);
+    const qIdx = gState.currentIdx || 0;
+    const pick = gState.selectedOptions?.[qIdx];
+    if (pick && pick.optionIdx !== undefined) {
+      this._updateLiveGroupOptionUI(qIdx, pick.optionIdx, pick.selectedBy || 'Anggota');
+    }
+    const draft = gState.essayDrafts?.[qIdx];
+    if (draft && draft.text !== undefined) {
+      this._updateLiveGroupEssayUI(qIdx, draft.text, draft.typedBy || 'Anggota');
+    }
+    this._refreshGuruLiveScoreboard();
+  },
+
   _buildGroupScoreboardHTML() {
     const user = Auth.getCurrentUser();
     const isGuru = user?.role === 'guru' || user?.role === 'admin';
@@ -339,8 +374,10 @@ const Pos3View = {
 
     const isLast = currentIdx >= questions.length - 1;
     const isPenentuan = q.babak === 'penentuan';
+    const isEsai = q.type === 'esai';
     const submittedAnswer = gState.answers?.[currentIdx] || null;
     const livePick = gState.selectedOptions?.[currentIdx] || null;
+    const liveEssay = gState.essayDrafts?.[currentIdx] || null;
     const isAnswered = !!submittedAnswer;
 
     this._kkTimeLeft = 15;
@@ -358,8 +395,8 @@ const Pos3View = {
             ${this._buildGroupScoreboardHTML()}
           </div>
           ${isPenentuan
-            ? '<div class="babak-badge penentuan">🔴 BABAK PENENTUAN!</div>'
-            : '<div class="babak-badge utama">🔵 BABAK UTAMA</div>'}
+            ? '<div class="babak-badge penentuan">🔴 BABAK PENENTUAN (ESAI)!</div>'
+            : '<div class="babak-badge utama">🔵 BABAK UTAMA (PILIHAN GANDA)</div>'}
           <div style="margin-top:14px;display:flex;flex-direction:column;gap:8px">
             <button class="btn-secondary sm" onclick="Pos3View._renderGroupKuisFinalResult(DB.getGroupById('${groupObj.id}'))">📊 Lihat Rekap Skor</button>
             ${isGuru ? `<button class="btn-danger sm" onclick="Pos3View.resetGroupQuizConfirm('${groupObj.id}')">🔄 Reset Kuis ${groupObj.name}</button>` : ''}
@@ -367,67 +404,10 @@ const Pos3View = {
           </div>
         </div>
 
-        <!-- Right Main Area: Question, Synchronized Options, 15s Timer, & Lock Button -->
+        <!-- Right Main Area: Question, Synchronized Options / Essay, 15s Timer, & Lock Button -->
         <div class="kuis-question-area">
-          <!-- Top Group Sync Banner -->
-          <div class="group-sync-live-bar" style="border-left:5px solid #FB8C00">
-            <div>
-              <strong>${groupObj.emoji || '👥'} Ruang Kuis Terpusat: ${groupObj.name}</strong>
-              <span style="font-size:0.84rem;color:var(--text-muted);display:block">
-                Setiap pilihan jawaban yang diklik anggota kelompok langsung tersinkronisasi di layar seluruh anggota ${groupObj.name}.
-              </span>
-            </div>
-            <span class="badge-done">🟢 Real-Time Aktif</span>
-          </div>
-
-          <div class="kuis-q-header ${isPenentuan ? 'penentuan' : 'utama'}">
-            <div class="kuis-q-num">Soal ${currentIdx + 1} dari ${questions.length}</div>
-            <div class="kuis-q-type">${isPenentuan ? '🔴 Babak Penentuan (4 Soal)' : '🔵 Babak Utama (6 Soal)'}</div>
-          </div>
-
-          <div class="kuis-q-text">${q.pertanyaan}</div>
-
-          <!-- Options Grid (Displayed immediately with Question during 15s Timer, Synced Across Group) -->
-          <div class="kuis-options-grid" id="kk-options-grid">
-            ${q.pilihan.map((p, i) => {
-              let btnClass = 'kuis-option';
-              if (isAnswered) {
-                if (i === q.jawaban) btnClass += ' correct';
-                else if (submittedAnswer.selected === i && !submittedAnswer.isCorrect) btnClass += ' wrong';
-              } else if (livePick && livePick.optionIdx === i) {
-                btnClass += ' group-selected';
-              }
-              return `
-                <button class="${btnClass}" id="kuis-opt-${i}"
-                  ${isAnswered ? 'disabled' : ''}
-                  onclick="Pos3View.onClickGroupOption('${groupObj.id}', ${currentIdx}, ${i})">
-                  <span class="kuis-opt-letter">${'ABCD'[i]}</span>
-                  <span class="kuis-opt-text">${p}</span>
-                  <span class="kuis-opt-sync-tag" id="kuis-opt-tag-${i}">
-                    ${!isAnswered && livePick && livePick.optionIdx === i
-                      ? `👥 Dipilih oleh ${livePick.selectedBy}`
-                      : (isAnswered && submittedAnswer.selected === i ? `🔒 Jawaban Kelompok` : '')}
-                  </span>
-                </button>
-              `;
-            }).join('')}
-          </div>
-
-          <!-- Live Group Selection & Lock Action Bar (When not yet submitted) -->
           ${!isAnswered ? `
-            <div class="group-lock-answer-bar" id="group-lock-bar">
-              <div id="group-live-pick-status">
-                ${livePick && livePick.optionIdx !== undefined
-                  ? `👥 Pilihan <strong>${groupObj.name}</strong> saat ini: <strong style="color:#1565C0">Pilihan ${'ABCD'[livePick.optionIdx]}</strong> (dipilih oleh <strong>${livePick.selectedBy}</strong>)`
-                  : `💡 Klik salah satu opsi (A, B, C, atau D) untuk berdiskusi dan menyamakan pilihan kelompokmu!`}
-              </div>
-              <button class="btn-primary lg" id="btn-lock-group-ans"
-                onclick="Pos3View.submitGroupAnswerNow('${groupObj.id}', ${currentIdx})">
-                🔒 Kunci & Kirim Jawaban Kelompok
-              </button>
-            </div>
-
-            <!-- 15-Second Visual Countdown Box -->
+            <!-- 15-Second Visual Countdown Box (Positioned at Top of Screen) -->
             <div id="kk-delay-box" class="kk-delay-countdown-box">
               <div class="kk-delay-ring-wrap">
                 <svg class="ta-timer-ring" viewBox="0 0 100 100">
@@ -445,6 +425,80 @@ const Pos3View = {
                 </div>
               </div>
             </div>
+          ` : ''}
+
+          <!-- Top Group Sync Banner -->
+          <div class="group-sync-live-bar" style="border-left:5px solid #FB8C00">
+            <div>
+              <strong>${groupObj.emoji || '👥'} Ruang Kuis Terpusat: ${groupObj.name}</strong>
+              <span style="font-size:0.84rem;color:var(--text-muted);display:block">
+                Setiap jawaban yang dipilih atau diketik anggota kelompok langsung tersinkronisasi di layar seluruh anggota ${groupObj.name}.
+              </span>
+            </div>
+            <span class="badge-done">🟢 Real-Time Aktif</span>
+          </div>
+
+          <div class="kuis-q-header ${isPenentuan ? 'penentuan' : 'utama'}">
+            <div class="kuis-q-num">Soal ${currentIdx + 1} dari ${questions.length}</div>
+            <div class="kuis-q-type">${isEsai ? '✍️ Babak Penentuan — Esai (Soal 7–10)' : '🔘 Babak Utama — Pilihan Ganda (Soal 1–6)'}</div>
+          </div>
+
+          <div class="kuis-q-text" style="white-space:pre-line">${q.pertanyaan}</div>
+
+          ${isEsai ? `
+            <!-- Synchronized Group Essay Answer Box (For Questions 7-10) -->
+            <div class="ta-esai-box" id="kk-essay-box" style="margin-bottom:16px">
+              <label class="form-label">✍️ Jawaban Esai Kelompok (${groupObj.name}):</label>
+              <textarea class="form-input ta-esai-textarea" id="kk-essay-input" rows="4"
+                ${isAnswered ? 'disabled' : ''}
+                placeholder="Ketik hasil diskusi jawaban esai kelompokmu di sini..."
+                oninput="Pos3View.onInputGroupEssay('${groupObj.id}', ${currentIdx}, this.value)">${isAnswered ? (submittedAnswer.essayText || '') : (liveEssay?.text || '')}</textarea>
+            </div>
+          ` : `
+            <!-- Options Grid (Displayed immediately with Question during 15s Timer, Synced Across Group) -->
+            <div class="kuis-options-grid" id="kk-options-grid">
+              ${(q.pilihan || []).map((p, i) => {
+                let btnClass = 'kuis-option';
+                if (isAnswered) {
+                  if (i === q.jawaban) btnClass += ' correct';
+                  else if (submittedAnswer.selected === i && !submittedAnswer.isCorrect) btnClass += ' wrong';
+                } else if (livePick && livePick.optionIdx === i) {
+                  btnClass += ' group-selected';
+                }
+                return `
+                  <button class="${btnClass}" id="kuis-opt-${i}"
+                    ${isAnswered ? 'disabled' : ''}
+                    onclick="Pos3View.onClickGroupOption('${groupObj.id}', ${currentIdx}, ${i})">
+                    <span class="kuis-opt-letter">${'ABCD'[i]}</span>
+                    <span class="kuis-opt-text">${p}</span>
+                    <span class="kuis-opt-sync-tag" id="kuis-opt-tag-${i}">
+                      ${!isAnswered && livePick && livePick.optionIdx === i
+                        ? `👥 Dipilih oleh ${livePick.selectedBy}`
+                        : (isAnswered && submittedAnswer.selected === i ? `🔒 Jawaban Kelompok` : '')}
+                    </span>
+                  </button>
+                `;
+              }).join('')}
+            </div>
+          `}
+
+          <!-- Live Group Selection & Lock Action Bar (When not yet submitted) -->
+          ${!isAnswered ? `
+            <div class="group-lock-answer-bar" id="group-lock-bar">
+              <div id="group-live-pick-status">
+                ${isEsai
+                  ? (liveEssay && liveEssay.text
+                      ? `✍️ Jawaban esai <strong>${groupObj.name}</strong> sedang diketik oleh <strong>${liveEssay.typedBy}</strong>`
+                      : `💡 Ketik jawaban esai hasil diskusi kelompokmu sebelum waktu habis!`)
+                  : (livePick && livePick.optionIdx !== undefined
+                      ? `👥 Pilihan <strong>${groupObj.name}</strong> saat ini: <strong style="color:#1565C0">Pilihan ${'ABCD'[livePick.optionIdx]}</strong> (dipilih oleh <strong>${livePick.selectedBy}</strong>)`
+                      : `💡 Klik salah satu opsi (A, B, C, atau D) untuk berdiskusi dan menyamakan pilihan kelompokmu!`)}
+              </div>
+              <button class="btn-primary lg" id="btn-lock-group-ans"
+                onclick="Pos3View.submitGroupAnswerNow('${groupObj.id}', ${currentIdx})">
+                🔒 Kunci & Kirim Jawaban Kelompok
+              </button>
+            </div>
           ` : `
             <!-- Answer Reveal Box (Shown after Group Submits or 15s Timer Ends) -->
             <div id="kuis-answer-reveal" class="kuis-answer-reveal" style="display:block">
@@ -456,7 +510,9 @@ const Pos3View = {
                         ? `🎉 JAWABAN ${groupObj.name.toUpperCase()} BENAR! (+${submittedAnswer.points} Poin) • Dikirim oleh ${submittedAnswer.submittedBy}`
                         : `❌ JAWABAN ${groupObj.name.toUpperCase()} BELUM TEPAT (0 Poin) • Dikirim oleh ${submittedAnswer.submittedBy}`}
                     </div>
-                    <strong>✅ Kunci Jawaban: ${'ABCD'[q.jawaban]}. ${q.pilihan[q.jawaban]}</strong>
+                    ${isEsai
+                      ? `<strong>✅ Kunci Jawaban Esai: ${q.kunciEsai || q.penjelasan || '-'}</strong>`
+                      : `<strong>✅ Kunci Jawaban: ${'ABCD'[q.jawaban]}. ${q.pilihan[q.jawaban]}</strong>`}
                   </div>
                   <div style="display:flex;gap:8px">
                     <button class="btn-secondary sm" onclick="Pos3View.prevKuisQ('${groupObj.id}')" ${currentIdx === 0 ? 'disabled' : ''}>← Jawaban Sebelumnya</button>
@@ -465,7 +521,7 @@ const Pos3View = {
                     </button>
                   </div>
                 </div>
-                ${q.penjelasan ? `<p style="margin-top:8px">${q.penjelasan}</p>` : ''}
+                ${!isEsai && q.penjelasan && !q.penjelasan.startsWith('Kunci Jawaban:') ? `<p style="margin-top:8px">${q.penjelasan}</p>` : ''}
               </div>
             </div>
           `}
@@ -502,6 +558,27 @@ const Pos3View = {
 
     DB.selectPos3GroupOption(groupId, qIdx, optionIdx, user.name);
     this._updateLiveGroupOptionUI(qIdx, optionIdx, user.name);
+  },
+
+  onInputGroupEssay(groupId, qIdx, value) {
+    const user = Auth.getCurrentUser();
+    if (!user) return;
+    DB.updatePos3GroupEssay(groupId, qIdx, value, user.name);
+    const statusEl = document.getElementById('group-live-pick-status');
+    if (statusEl) {
+      statusEl.innerHTML = `✍️ Jawaban esai kelompok sedang diketik oleh <strong>${user.name}</strong>`;
+    }
+  },
+
+  _updateLiveGroupEssayUI(qIdx, essayText, userName) {
+    const inp = document.getElementById('kk-essay-input');
+    if (inp && document.activeElement !== inp) {
+      inp.value = essayText || '';
+    }
+    const statusEl = document.getElementById('group-live-pick-status');
+    if (statusEl) {
+      statusEl.innerHTML = `✍️ Jawaban esai kelompok sedang diketik oleh <strong>${userName}</strong>`;
+    }
   },
 
   _updateLiveGroupOptionUI(qIdx, optionIdx, userName) {
@@ -560,6 +637,12 @@ const Pos3View = {
     const grp = DB.getGroupById(groupId);
     if (!grp) return;
 
+    // Make sure current essay textarea text is saved if this is an essay question
+    const essayInp = document.getElementById('kk-essay-input');
+    if (essayInp) {
+      DB.updatePos3GroupEssay(groupId, qIdx, essayInp.value, user?.name || 'Anggota Kelompok');
+    }
+
     const gState = DB.getPos3ForGroup(groupId);
     if (gState.answers?.[qIdx]) {
       this._renderGroupKuisQuestion(grp, false);
@@ -574,6 +657,9 @@ const Pos3View = {
     this._renderGroupKuisQuestion(grp, false);
 
     if (q && ansRec) {
+      const detailText = q.type === 'esai'
+        ? `Kunci Jawaban Esai: ${q.kunciEsai || q.penjelasan || '-'}`
+        : `Kunci Jawaban: ${'ABCD'[q.jawaban]}. ${q.pilihan[q.jawaban]}${q.penjelasan && !q.penjelasan.startsWith('Kunci Jawaban:') ? ' — ' + q.penjelasan : ''}`;
       App.showPointFeedback({
         groupName: `${grp.emoji || '👥'} ${grp.name}`,
         pointsEarned: ansRec.points || 0,
@@ -581,7 +667,7 @@ const Pos3View = {
         isCorrect: !!ansRec.isCorrect,
         title: ansRec.isCorrect ? 'Jawaban Kelompok BENAR!' : 'Jawaban Kelompok Belum Tepat',
         subtitle: `Soal #${qIdx + 1} • ${fromTimer ? 'Waktu 15 Detik Selesai' : 'Dikirim oleh ' + submitterLabel}`,
-        detail: `Kunci Jawaban: ${'ABCD'[q.jawaban]}. ${q.pilihan[q.jawaban]}${q.penjelasan ? ' — ' + q.penjelasan : ''}`
+        detail: detailText
       });
     }
   },
@@ -666,14 +752,16 @@ const Pos3View = {
           <div style="display:flex;flex-direction:column;gap:10px;margin-top:12px">
             ${questions.map((q, idx) => {
               const ans = gState.answers?.[idx];
+              const isEsai = q.type === 'esai';
               return `
                 <div class="ta-answer-row ${ans ? (ans.isCorrect ? 'correct' : 'wrong') : ''}">
                   <span class="ta-ans-num">${idx + 1}</span>
                   <div class="ta-ans-q">
                     <strong>${q.pertanyaan}</strong>
                     <small style="display:block;color:var(--text-muted)">
-                      Jawaban Kelompok: ${ans && ans.selected >= 0 ? `${'ABCD'[ans.selected]}. ${q.pilihan[ans.selected]}` : '(Belum dijawab)'}
-                      • Kunci: <strong>${'ABCD'[q.jawaban]}. ${q.pilihan[q.jawaban]}</strong>
+                      ${isEsai
+                        ? `Jawaban Kelompok: ${ans?.essayText || '(Belum dijawab)'} • Kunci Esai: <strong>${q.kunciEsai || q.penjelasan || '-'}</strong>`
+                        : `Jawaban Kelompok: ${ans && ans.selected >= 0 ? `${'ABCD'[ans.selected]}. ${q.pilihan[ans.selected]}` : '(Belum dijawab)'} • Kunci: <strong>${'ABCD'[q.jawaban]}. ${q.pilihan[q.jawaban]}</strong>`}
                     </small>
                   </div>
                   <div class="ta-ans-result">

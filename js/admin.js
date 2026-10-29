@@ -3,8 +3,10 @@
 // ============================================================
 
 const AdminView = {
+  _currentTab: 'overview',
 
   render(tab = 'overview') {
+    this._currentTab = tab;
     const el = document.getElementById('view-admin');
     el.innerHTML = `
       <div class="dashboard-layout">
@@ -17,7 +19,9 @@ const AdminView = {
   },
 
   _renderTab(tab) {
+    this._currentTab = tab;
     const main = document.getElementById('admin-main');
+    if (!main) return;
     switch (tab) {
       case 'overview':  main.innerHTML = this._tabOverview(); break;
       case 'users':     main.innerHTML = this._tabUsers(); break;

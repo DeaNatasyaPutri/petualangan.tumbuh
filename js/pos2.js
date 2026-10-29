@@ -34,11 +34,19 @@ const Pos2View = {
 
       // ── 1. Handle Real-Time Typing on Collaborative LKK ──
       if (msg.event === 'POS2_LKK_TYPING') {
-        const { groupId, fieldIndex, value, userName } = msg.payload || {};
+        const p = msg.payload || {};
+        const groupId = p.groupId;
+        const fieldIndex = p.fieldIndex !== undefined ? p.fieldIndex : p.fieldIdx;
+        const value = p.value !== undefined ? p.value : p.text;
+        const userName = p.userName || 'Teman';
 
         if (user.role === 'murid') {
           const myGroup = Auth.getCurrentGroup();
-          if (myGroup && myGroup.id === groupId) {
+          const state = DB.getPos2State();
+          const myCaseId = myGroup ? state.assignments?.[myGroup.id]?.caseId : null;
+          const theirCaseId = state.assignments?.[groupId]?.caseId;
+
+          if (myGroup && (myGroup.id === groupId || !myCaseId || myCaseId === theirCaseId)) {
             const ta = document.getElementById(`lkk-ans-${fieldIndex}`);
             if (ta && ta.value !== value) {
               const selStart = ta.selectionStart;
@@ -49,15 +57,19 @@ const Pos2View = {
               }
             }
             this._showLiveTypingBadge(fieldIndex, userName);
-            this._updateLKKProgressCounter(groupId);
+            this._updateLKKProgressCounter(myGroup.id);
           }
         } else {
-          // Guru live monitor update
-          const guruCell = document.getElementById(`guru-live-lkk-${groupId}-${fieldIndex}`);
-          if (guruCell) {
-            guruCell.textContent = value || '(Belum diisi)';
-            guruCell.classList.toggle('empty', !value);
-          }
+          // Guru live monitor update across all matching cells
+          DB.getGroups().forEach(g => {
+            const state = DB.getPos2State();
+            const ans = state.lkk?.[g.id]?.answers?.[fieldIndex];
+            const guruCell = document.getElementById(`guru-live-lkk-${g.id}-${fieldIndex}`);
+            if (guruCell && ans !== undefined) {
+              guruCell.textContent = ans || '(Belum diisi)';
+              guruCell.classList.toggle('empty', !ans);
+            }
+          });
           const guruBadge = document.getElementById(`guru-live-typing-${groupId}`);
           if (guruBadge) {
             guruBadge.innerHTML = `✍️ <strong>${userName}</strong> sedang mengetik Q${fieldIndex + 1}...`;
@@ -69,16 +81,14 @@ const Pos2View = {
 
       // ── 2. Handle Case Assigned by Teacher Spin ──
       if (msg.event === 'POS2_CASE_ASSIGNED') {
-        const { groupId, caseId } = msg.payload || {};
+        const { caseId } = msg.payload || {};
         if (user.role === 'murid') {
           const myGroup = Auth.getCurrentGroup();
-          if (myGroup && myGroup.id === groupId) {
-            const c = DB.getCases().find(x => x.id === caseId);
-            if (typeof SoundManager !== 'undefined') SoundManager.playSFX('reveal');
-            App.showConfetti(45);
-            App.showToast(`🎡 Guru telah mengundi kasus "${c?.title || ''}" untuk ${myGroup.name}!`, 'success');
-            this.render();
-          }
+          const c = DB.getCases().find(x => x.id === caseId);
+          if (typeof SoundManager !== 'undefined') SoundManager.playSFX('reveal');
+          App.showConfetti(45);
+          App.showToast(`🎡 Kasus "${c?.title || ''}" telah siap di layar ${myGroup?.name || 'kelompokmu'}!`, 'success');
+          this.render();
         } else {
           this.render();
         }
@@ -140,15 +150,45 @@ const Pos2View = {
   // ══════════════════════════════════════════════════════════
   // A. TAMPILAN GURU / ADMIN — KENDALI PENUH RODA UNDIAN & MONITOR
   // ══════════════════════════════════════════════════════════
+  _getRemainingCases() {
+    const cases = DB.getCases();
+    const state = DB.getPos2State();
+    const takenCaseIds = Object.values(state.assignments || {})
+      .map(a => a && a.caseId)
+      .filter(Boolean);
+    return cases.filter(c => !takenCaseIds.includes(c.id));
+  },
+
   _renderGuruView(user) {
     const groups = DB.getGroups();
     const cases = DB.getCases();
     const state = DB.getPos2State();
     const turnOrder = state.turnOrder || [];
     const remainingGroups = groups.filter(g => !turnOrder.includes(g.id));
-    const activeGroup = groups.find(g => g.id === state.activeGroupId) || groups.find(g => turnOrder.includes(g.id)) || groups[0] || null;
-    const activeAssign = activeGroup ? state.assignments?.[activeGroup.id] : null;
-    const activeCase = activeAssign ? cases.find(c => c.id === activeAssign.caseId) : (this._previewCaseId ? cases.find(c => c.id === this._previewCaseId) : null);
+    const remainingCases = this._getRemainingCases();
+
+    // Urutan efektif di Roda 2: dahulukan hasil Roda 1 (turnOrder), lalu sisa kelompok agar urutan 1 -> 2 -> 3 -> 4 -> 5 tidak pernah macet
+    const effectiveTurnOrder = [
+      ...turnOrder,
+      ...groups.map(g => g.id).filter(gid => !turnOrder.includes(gid))
+    ];
+
+    // Kelompok target di Roda 2 SELALU otomatis berpindah ke urutan selanjutnya yang belum mendapat kasus
+    const nextUnassignedInTurn = effectiveTurnOrder.find(gid => !state.assignments?.[gid]?.caseId) || null;
+    const nextTurnGroup = nextUnassignedInTurn ? groups.find(g => g.id === nextUnassignedInTurn) : null;
+    const nextTurnIdx = nextTurnGroup ? effectiveTurnOrder.indexOf(nextTurnGroup.id) : -1;
+
+    // Kelompok yang baru saja selesai diundi di Roda 2 (atau dipilih manual) untuk ditampilkan Keterangan Kasusnya
+    const assignedInOrder = effectiveTurnOrder.filter(gid => state.assignments?.[gid]?.caseId);
+    const previewGroupId = (this._manualSelectedGroupId && state.assignments?.[this._manualSelectedGroupId]?.caseId)
+      ? this._manualSelectedGroupId
+      : (this._lastSpunGroupId && state.assignments?.[this._lastSpunGroupId]?.caseId)
+        ? this._lastSpunGroupId
+        : (assignedInOrder.length > 0 ? assignedInOrder[assignedInOrder.length - 1] : null);
+    const previewGroup = previewGroupId ? groups.find(g => g.id === previewGroupId) : null;
+    const previewAssign = previewGroup ? state.assignments?.[previewGroup.id] : null;
+    const previewCase = previewAssign ? cases.find(c => c.id === previewAssign.caseId) : null;
+    const previewTurnIdx = previewGroup ? effectiveTurnOrder.indexOf(previewGroup.id) : -1;
 
     const el = document.getElementById('view-pos2');
     el.innerHTML = `
@@ -169,11 +209,11 @@ const Pos2View = {
 
         <div class="pos-content pos2-content">
           <!-- TAHAP 1: RODA PUTAR UNDIAN URUTAN MAJU KELOMPOK -->
-          <div class="pos2-stage-card">
+          <div class="pos2-stage-card" id="pos2-stage1">
             <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:16px">
               <div>
-                <span class="pos2-stage-badge" style="margin-bottom:4px">TAHAP 1 — UNDIAN URUTAN MAJU KELOMPOK (DIKENDALIKAN GURU)</span>
-                <h3 style="font-size:1.2rem">Putar Roda 1 untuk Mengundi Giliran Kelompok atau Pilih Kelompok Secara Langsung</h3>
+                <span class="pos2-stage-badge" style="margin-bottom:4px">TAHAP 1 — UNDIAN URUTAN MAJU KELOMPOK (RODA 1)</span>
+                <h3 style="font-size:1.2rem">Putar Roda 1 untuk Menentukan Urutan Maju Kelompok (Urutan #1 s.d. #${groups.length})</h3>
               </div>
               <button class="btn-secondary sm" onclick="Pos2View.resetAllPos2Confirm()">🔄 Reset Seluruh Undian Pos 2</button>
             </div>
@@ -191,8 +231,8 @@ const Pos2View = {
                 </button>
                 <p class="wheel-hint" id="group-wheel-hint">
                   ${remainingGroups.length > 0
-                    ? `Tersisa <strong>${remainingGroups.length}</strong> kelompok yang belum diundi urutan majunya.`
-                    : `Semua kelompok sudah mendapat giliran! Klik kelompok di sebelah kanan untuk mengundi kasusnya.`}
+                    ? `Tersisa <strong>${remainingGroups.length}</strong> kelompok di Roda 1 yang belum diundi urutan majunya.`
+                    : `Semua kelompok sudah mendapat urutan maju! Lanjutkan pengundian kasus di <strong>Tahap 2 (Roda 2)</strong> di bawah.`}
                 </p>
               </div>
 
@@ -200,21 +240,28 @@ const Pos2View = {
               <div class="group-order-panel">
                 <div class="group-turn-result-box">
                   <div style="display:flex;justify-content:space-between;align-items:center">
-                    <h4>📋 Daftar Kelompok & Status Undian Kasus (${groups.length} Kelompok)</h4>
-                    <small style="color:var(--text-muted);font-weight:700">Klik kelompok untuk memilih giliran Roda 2</small>
+                    <h4>📋 Hasil Urutan Maju Kelompok (${turnOrder.length}/${groups.length} Terundi)</h4>
+                    <small style="color:var(--text-muted);font-weight:700">Urutan ini digunakan otomatis pada Roda 2</small>
                   </div>
                   <div class="turn-order-list" style="margin-top:12px">
-                    ${groups.map((g, idx) => {
+                    ${[...groups].sort((a, b) => {
+                      const ia = turnOrder.indexOf(a.id);
+                      const ib = turnOrder.indexOf(b.id);
+                      if (ia >= 0 && ib >= 0) return ia - ib;
+                      if (ia >= 0) return -1;
+                      if (ib >= 0) return 1;
+                      return 0;
+                    }).map((g) => {
                       const turnIdx = turnOrder.indexOf(g.id);
-                      const isSelected = activeGroup && activeGroup.id === g.id;
+                      const isNextInWheel2 = nextTurnGroup && nextTurnGroup.id === g.id;
                       const assigned = state.assignments?.[g.id];
                       const assignedCaseObj = assigned ? cases.find(c => c.id === assigned.caseId) : null;
                       const memberCount = (g.memberIds || []).length;
 
                       return `
-                        <div class="turn-order-item ${isSelected ? 'active-turn' : ''}" onclick="Pos2View.selectActiveGroupForWheel('${g.id}')">
+                        <div class="turn-order-item ${isNextInWheel2 ? 'active-turn' : ''}" onclick="Pos2View.selectActiveGroupForWheel('${g.id}')">
                           <span class="turn-badge" style="background:${turnIdx >= 0 ? g.color || '#1565C0' : '#94A3B8'}">
-                            ${turnIdx >= 0 ? `Urutan #${turnIdx + 1}` : `Kelompok ${idx + 1}`}
+                            ${turnIdx >= 0 ? `Urutan #${turnIdx + 1}` : `Belum Diundi`}
                           </span>
                           <div style="flex:1">
                             <strong>${g.emoji || '👥'} ${g.name}</strong>
@@ -222,11 +269,19 @@ const Pos2View = {
                               ${memberCount} Murid •
                               ${assignedCaseObj
                                 ? `<span style="color:#2E7D32;font-weight:800">✅ Kasus: ${assignedCaseObj.emoji} ${assignedCaseObj.title}</span>`
-                                : `<span style="color:#E65100;font-weight:700">⏳ Belum dapat kasus (Layar murid menunggu)</span>`}
+                                : turnIdx >= 0
+                                  ? `<span style="color:#E65100;font-weight:700">⏳ Menunggu Undian Kasus di Roda 2 (Urutan #${turnIdx + 1})</span>`
+                                  : `<span style="color:#64748B;font-weight:700">⏳ Belum diundi di Roda 1</span>`}
                             </small>
                           </div>
                           <span class="turn-action">
-                            ${isSelected ? '🎯 Aktif di Roda 2' : 'Pilih Kelompok →'}
+                            ${isNextInWheel2
+                              ? '🎯 Giliran Roda 2 Sekarang'
+                              : assignedCaseObj
+                                ? '✅ Sudah Diundi'
+                                : turnIdx >= 0
+                                  ? `Antrean #${turnIdx + 1}`
+                                  : 'Putar Roda 1'}
                           </span>
                         </div>
                       `;
@@ -237,52 +292,126 @@ const Pos2View = {
             </div>
           </div>
 
-          <!-- TAHAP 2: RODA KASUS UNTUK KELOMPOK AKTIF -->
-          ${activeGroup ? `
-            <div class="pos2-main-area" id="pos2-main">
-              <div class="pos2-kelompok-display">
-                <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-                  <span class="pos2-stage-badge" style="margin:0;background:#43A047">TAHAP 2 — UNDIAN RODA KASUS</span>
-                  <span>Target Kelompok Saat Ini: <strong style="color:${activeGroup.color || '#1565C0'};font-size:1.15rem">${activeGroup.emoji || '👥'} ${activeGroup.name}</strong></span>
+          <!-- TAHAP 2: RODA KASUS BERDASARKAN URUTAN MAJU RODA 1 -->
+          <div class="pos2-main-area" id="pos2-main">
+            <div class="pos2-kelompok-display">
+              <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+                <span class="pos2-stage-badge" style="margin:0;background:#43A047">TAHAP 2 — UNDIAN RODA KASUS</span>
+                ${nextTurnGroup ? `
+                  <span>Giliran Undi Kasus Saat Ini: <strong style="color:${nextTurnGroup.color || '#1565C0'};font-size:1.15rem">Urutan #${nextTurnIdx + 1} — ${nextTurnGroup.emoji || '👥'} ${nextTurnGroup.name}</strong></span>
+                ` : remainingCases.length === 0 ? `
+                  <span>Status Roda 2: <strong style="color:#2E7D32;font-size:1.1rem">✅ Seluruh Kelompok Sudah Mendapatkan Studi Kasus</strong></span>
+                ` : `
+                  <span>Status Roda 2: <strong style="color:#E65100;font-size:1.05rem">⏳ Menunggu Urutan Maju dari Roda 1 di Atas</strong></span>
+                `}
+              </div>
+              <div>
+                ${nextTurnGroup ? `
+                  <span class="badge-pending">🎯 Siap Mengundi Kasus untuk Urutan #${nextTurnIdx + 1} (${nextTurnGroup.name})</span>
+                ` : remainingCases.length === 0 ? `
+                  <span class="badge-done">✅ Semua ${cases.length} Kasus Telah Terbagi</span>
+                ` : `
+                  <span class="badge-pending">⬆️ Putar Roda 1 Terlebih Dahulu</span>
+                `}
+              </div>
+            </div>
+
+            <div class="pos2-split">
+              <!-- Spinning Wheel 2 (Roda Kasus) -->
+              <div class="wheel-section">
+                <h3 class="wheel-section-title">
+                  ${nextTurnGroup
+                    ? `🎡 Roda 2: Undi Kasus — Urutan #${nextTurnIdx + 1} (${nextTurnGroup.name})`
+                    : remainingCases.length === 0
+                      ? `🎡 Roda 2: Semua Kasus Sudah Terbagi`
+                      : `🎡 Roda 2: Undi Kasus Berdasarkan Urutan Roda 1`}
+                </h3>
+                <div class="wheel-container">
+                  <div class="wheel-pointer">▼</div>
+                  <canvas id="wheel-canvas" width="350" height="350"></canvas>
                 </div>
-                <div>
-                  ${activeAssign ? `
-                    <span class="badge-done">✅ Kasus Sudah Ditetapkan & Tayang di Layar ${activeGroup.name}</span>
-                  ` : `
-                    <span class="badge-pending">⏳ Layar ${activeGroup.name} Menunggu Putaran Roda 2</span>
-                  `}
-                </div>
+                ${nextTurnGroup && remainingCases.length > 0 ? `
+                  <button class="btn-spin" id="btn-spin" onclick="Pos2View.spinCaseWheelForGroup('${nextTurnGroup.id}')">
+                    🎡 PUTAR KASUS UNTUK URUTAN #${nextTurnIdx + 1} (${nextTurnGroup.name.toUpperCase()})!
+                  </button>
+                ` : remainingCases.length === 0 ? `
+                  <button class="btn-spin" id="btn-spin" disabled>
+                    ✅ SEMUA KASUS SUDAH TERBAGI KE KELOMPOK
+                  </button>
+                ` : `
+                  <button class="btn-spin" id="btn-spin" onclick="Pos2View.scrollToRoda1()">
+                    ⬆️ PUTAR RODA 1 DULU UNTUK MENENTUKAN URUTAN KELOMPOK!
+                  </button>
+                `}
+                <p class="wheel-hint" id="wheel-hint">
+                  ${remainingCases.length > 0
+                    ? `Tersisa <strong>${remainingCases.length}</strong> dari <strong>${cases.length}</strong> kasus di Roda 2. Saat 1 kasus terpilih, nama kasus tersebut otomatis hilang dari roda dan giliran lanjut ke urutan berikutnya.`
+                    : `Seluruh <strong>${cases.length}</strong> studi kasus telah habis diundi dan dibagikan!`}
+                </p>
               </div>
 
-              <div class="pos2-split">
-                <!-- Spinning Wheel 2 (Roda Kasus) -->
-                <div class="wheel-section">
-                  <h3 class="wheel-section-title">🎡 Roda 2: Undi Kasus untuk ${activeGroup.name}</h3>
-                  <div class="wheel-container">
-                    <div class="wheel-pointer">▼</div>
-                    <canvas id="wheel-canvas" width="350" height="350"></canvas>
-                  </div>
-                  <button class="btn-spin" id="btn-spin" onclick="Pos2View.spinCaseWheelForGroup('${activeGroup.id}')">
-                    🎡 PUTAR & TETAPKAN KASUS KE ${activeGroup.name.toUpperCase()}!
-                  </button>
-                  <p class="wheel-hint" id="wheel-hint">
-                    Begitu roda berhenti, studi kasus otomatis dikirim & muncul secara real-time di layar semua anggota <strong>${activeGroup.name}</strong>!
-                  </p>
-                </div>
-
-                <!-- Case Display Preview for Active Group -->
-                <div class="case-section" id="case-section">
-                  ${activeCase ? this._buildCaseCardHTML(activeCase, activeGroup.name) : `
-                    <div class="case-empty" id="case-empty">
-                      <div class="case-empty-icon">🎴</div>
-                      <h3>Belum Ada Kasus untuk ${activeGroup.name}</h3>
-                      <p>Klik tombol <strong>"PUTAR & TETAPKAN KASUS"</strong> di sebelah kiri untuk mengacak 5 kartu kasus dan menampilkannya ke layar anggota <strong>${activeGroup.name}</strong>!</p>
+              <!-- Hasil Judul Kasus & Status Urutan Berikutnya di Sebelah Kanan Roda 2 -->
+              <div class="case-section" id="case-section">
+                ${previewCase && previewGroup ? `
+                  <div class="case-card-result" style="border-top:5px solid ${previewCase.color};margin-bottom:16px">
+                    <div class="case-card-top" style="background:${previewCase.bgGradient}">
+                      <div class="case-result-emoji">${previewCase.emoji}</div>
+                      <div class="case-result-badge">🎴 HASIL UNDIAN RODA 2 — URUTAN #${previewTurnIdx + 1} (${previewGroup.name.toUpperCase()})</div>
                     </div>
-                  `}
+                    <div class="case-card-inner" style="text-align:center;padding:20px 22px">
+                      <div style="font-size:0.82rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;margin-bottom:6px">
+                        Judul Kasus yang Didapat oleh ${previewGroup.emoji || '👥'} ${previewGroup.name}:
+                      </div>
+                      <h2 class="case-result-title" style="margin:0;font-size:1.35rem">${previewCase.emoji} ${previewCase.title}</h2>
+                      <div style="margin-top:12px;font-size:0.88rem;color:#2E7D32;font-weight:700">
+                        ${nextTurnGroup
+                          ? `👉 Giliran Roda 2 kini otomatis berpindah ke <strong>Urutan #${nextTurnIdx + 1} (${nextTurnGroup.emoji || '👥'} ${nextTurnGroup.name})</strong>`
+                          : `✅ Seluruh kelompok telah mendapatkan judul kasus!`}
+                      </div>
+                    </div>
+                  </div>
+                ` : ''}
+
+                <div class="group-turn-result-box">
+                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                    <h4>📋 Daftar Urutan Kelompok & Judul Kasus (Urutan #1 s.d. #${effectiveTurnOrder.length})</h4>
+                    <small style="color:var(--text-muted);font-weight:700">Sisa ${remainingCases.length} Kasus di Roda 2</small>
+                  </div>
+                  <div class="turn-order-list">
+                    ${effectiveTurnOrder.map((gid, tIdx) => {
+                      const gItem = groups.find(x => x.id === gid);
+                      if (!gItem) return '';
+                      const gAssign = state.assignments?.[gid];
+                      const gCase = gAssign ? cases.find(c => c.id === gAssign.caseId) : null;
+                      const isCurrentTurn = nextTurnGroup && nextTurnGroup.id === gid;
+                      const isPreviewed = previewGroup && previewGroup.id === gid;
+
+                      return `
+                        <div class="turn-order-item ${isCurrentTurn ? 'active-turn' : ''}" onclick="Pos2View.selectActiveGroupForWheel('${gid}')" style="${isPreviewed && gCase ? 'border-color:#2E7D32;background:#F1F8E9' : ''}">
+                          <span class="turn-badge" style="background:${gItem.color || '#1565C0'}">
+                            Urutan #${tIdx + 1}
+                          </span>
+                          <div style="flex:1">
+                            <strong>${gItem.emoji || '👥'} ${gItem.name}</strong>
+                            <small style="display:block;color:var(--text-muted)">
+                              ${gCase
+                                ? `<span style="color:#2E7D32;font-weight:800">✅ Kasus: ${gCase.emoji} ${gCase.title}</span>`
+                                : isCurrentTurn
+                                  ? `<span style="color:#1565C0;font-weight:800">🎯 Giliran Diundi Sekarang di Roda 2!</span>`
+                                  : `<span style="color:#E65100;font-weight:700">⏳ Menunggu Giliran Urutan #${tIdx + 1}</span>`}
+                            </small>
+                          </div>
+                          <span class="turn-action">
+                            ${gCase ? '✅ Terpilih' : isCurrentTurn ? '👈 Giliran Roda 2' : `Antrean #${tIdx + 1}`}
+                          </span>
+                        </div>
+                      `;
+                    }).join('')}
+                  </div>
                 </div>
               </div>
             </div>
-          ` : ''}
+          </div>
 
           <!-- TAHAP 3: LIVE MONITOR KOLABORASI LKK SELURUH KELOMPOK -->
           <div class="pos2-stage-card" style="margin-top:28px;border-top-color:#43A047">
@@ -341,7 +470,7 @@ const Pos2View = {
     `;
 
     this._drawGroupWheel(remainingGroups);
-    this._drawCaseWheel();
+    this._drawCaseWheel(remainingCases);
   },
 
   // ══════════════════════════════════════════════════════════
@@ -561,6 +690,35 @@ const Pos2View = {
     this._updateLKKProgressCounter(myGroup.id);
   },
 
+  _syncLKKFieldsInPlace() {
+    const user = Auth.getCurrentUser();
+    if (!user) return;
+    const state = DB.getPos2State();
+    if (user.role === 'murid') {
+      const myGroup = Auth.getCurrentGroup();
+      if (!myGroup) return;
+      const answers = state.lkk?.[myGroup.id]?.answers || [];
+      for (let i = 0; i < 5; i++) {
+        const ta = document.getElementById(`lkk-ans-${i}`);
+        if (ta && document.activeElement !== ta && answers[i] !== undefined && ta.value !== answers[i]) {
+          ta.value = answers[i];
+        }
+      }
+      this._updateLKKProgressCounter(myGroup.id);
+    } else {
+      DB.getGroups().forEach(g => {
+        const answers = state.lkk?.[g.id]?.answers || [];
+        for (let i = 0; i < 5; i++) {
+          const cell = document.getElementById(`guru-live-lkk-${g.id}-${i}`);
+          if (cell && answers[i] !== undefined) {
+            cell.textContent = answers[i] || '(Belum diisi)';
+            cell.classList.toggle('empty', !answers[i]);
+          }
+        }
+      });
+    }
+  },
+
   _showLiveTypingBadge(fieldIndex, userName) {
     const badge = document.getElementById('student-live-typing-indicator');
     const fieldHint = document.getElementById(`field-typing-${fieldIndex}`);
@@ -636,9 +794,18 @@ const Pos2View = {
   // ══════════════════════════════════════════════════════════
   selectActiveGroupForWheel(groupId) {
     const state = DB.getPos2State();
-    state.activeGroupId = groupId;
-    DB.savePos2State(state, 'POS2_STATE_UPDATED');
+    if (state.assignments?.[groupId]?.caseId) {
+      this._manualSelectedGroupId = groupId;
+    } else {
+      this._manualSelectedGroupId = null;
+    }
     this.render();
+  },
+
+  scrollToRoda1() {
+    App.showToast('Putar Roda 1 terlebih dahulu untuk menentukan urutan maju kelompok!', 'warning');
+    const el = document.getElementById('pos2-stage1');
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
   },
 
   resetAllPos2Confirm() {
@@ -658,6 +825,9 @@ const Pos2View = {
   doResetAllPos2() {
     DB.resetPos2State();
     this._previewCaseId = null;
+    this._previewGroupName = null;
+    this._lastSpunGroupId = null;
+    this._manualSelectedGroupId = null;
     App.closeModal();
     App.showToast('Seluruh undian Pos 2 berhasil direset!', 'info');
     this.render();
@@ -667,8 +837,10 @@ const Pos2View = {
     const canvas = document.getElementById('wheel-group-canvas');
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-    const groups = remainingGroups && remainingGroups.length > 0 ? remainingGroups : DB.getGroups();
-    const list = groups.length > 0 ? groups : [{ name: 'Belum Ada Kelompok', color: '#1E88E5' }];
+    const rawGroups = Array.isArray(remainingGroups) ? remainingGroups : DB.getGroups();
+    const list = rawGroups.length > 0
+      ? rawGroups
+      : [{ name: 'Semua Kelompok Terundi', emoji: '✅', color: '#43A047' }];
     const n = list.length;
     const cx = canvas.width / 2;
     const cy = canvas.height / 2;
@@ -771,12 +943,17 @@ const Pos2View = {
         const chosenGroup = remaining[targetIdx];
         const latest = DB.getPos2State();
         if (!latest.turnOrder) latest.turnOrder = [];
-        latest.turnOrder.push(chosenGroup.id);
-        latest.activeGroupId = chosenGroup.id;
+        if (!latest.turnOrder.includes(chosenGroup.id)) {
+          latest.turnOrder.push(chosenGroup.id);
+        }
+        this._manualSelectedGroupId = null;
+        const firstUnassignedInTurn = latest.turnOrder.find(gid => !latest.assignments?.[gid]?.caseId);
+        latest.activeGroupId = firstUnassignedInTurn || chosenGroup.id;
         DB.savePos2State(latest, 'POS2_STATE_UPDATED');
 
+        this._groupAngle = 0;
         App.showConfetti(35);
-        App.showToast(`🎉 Giliran Maju #${latest.turnOrder.length}: ${chosenGroup.name}! Sekarang putar Roda 2 untuk mengundi kasusnya!`, 'success');
+        App.showToast(`🎉 Urutan Maju #${latest.turnOrder.length}: ${chosenGroup.name}! Kelompok yang terpilih otomatis hilang dari Roda 1.`, 'success');
         this.render();
       }
     };
@@ -784,11 +961,14 @@ const Pos2View = {
     requestAnimationFrame(animate);
   },
 
-  _drawCaseWheel(highlightIdx = -1) {
+  _drawCaseWheel(remainingCases = null, highlightIdx = -1) {
     const canvas = document.getElementById('wheel-canvas');
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-    const cases = DB.getCases();
+    const rawCases = Array.isArray(remainingCases) ? remainingCases : this._getRemainingCases();
+    const cases = rawCases.length > 0
+      ? rawCases
+      : [{ id: 'done', emoji: '✅', title: 'Semua Kasus Terbagi', color: '#43A047' }];
     const n = cases.length;
     const cx = canvas.width / 2;
     const cy = canvas.height / 2;
@@ -806,9 +986,9 @@ const Pos2View = {
       ctx.moveTo(cx, cy);
       ctx.arc(cx, cy, r, startAngle, endAngle);
       ctx.closePath();
-      ctx.fillStyle = i === highlightIdx ? '#FFD700' : colors[i % colors.length];
+      ctx.fillStyle = i === highlightIdx ? '#FFD700' : (c.color || colors[i % colors.length]);
       ctx.fill();
-      ctx.strokeStyle = '#fff';
+      ctx.strokeStyle = '#FFFFFF';
       ctx.lineWidth = 3;
       ctx.stroke();
 
@@ -816,15 +996,11 @@ const Pos2View = {
       ctx.translate(cx, cy);
       ctx.rotate(startAngle + sliceAngle / 2);
       ctx.textAlign = 'right';
-      ctx.fillStyle = i === highlightIdx ? '#1A1A2E' : '#fff';
-
-      ctx.font = '22px serif';
-      ctx.fillText(c.emoji, r - 14, 6);
-
-      ctx.font = 'bold 11px Nunito, sans-serif';
-      const words = c.title.split(' ');
-      const short = words.slice(0, 2).join(' ');
-      ctx.fillText(short, r - 44, 22);
+      ctx.fillStyle = i === highlightIdx ? '#1A1A2E' : '#FFFFFF';
+      ctx.font = 'bold 12px Nunito, sans-serif';
+      const label = `${c.emoji || '🎴'} ${c.title || ''}`.trim();
+      const shortTitle = label.length > 22 ? label.substring(0, 21) + '…' : label;
+      ctx.fillText(shortTitle, r - 18, 5);
       ctx.restore();
     });
 
@@ -844,22 +1020,38 @@ const Pos2View = {
 
   spinCaseWheelForGroup(groupId) {
     if (this._spinningCase) return;
-    const grp = DB.getGroupById(groupId);
-    if (!grp) {
-      App.showToast('Pilih kelompok terlebih dahulu!', 'warning');
+    const groups = DB.getGroups();
+    const state = DB.getPos2State();
+    const turnOrder = state.turnOrder || [];
+    const effectiveTurnOrder = [
+      ...turnOrder,
+      ...groups.map(g => g.id).filter(gid => !turnOrder.includes(gid))
+    ];
+    const nextInTurn = effectiveTurnOrder.find(gid => !state.assignments?.[gid]?.caseId) || groupId;
+    const grp = DB.getGroupById(nextInTurn);
+    if (!grp) return;
+
+    if (state.assignments?.[grp.id]?.caseId) {
+      App.showToast(`${grp.name} sudah mendapat studi kasus!`, 'info');
       return;
     }
 
+    const remainingCases = this._getRemainingCases();
+    if (remainingCases.length === 0) {
+      App.showToast('Semua studi kasus sudah terbagi ke kelompok!', 'info');
+      return;
+    }
+
+    const turnIdx = effectiveTurnOrder.indexOf(grp.id);
     this._spinningCase = true;
     const btn = document.getElementById('btn-spin');
     if (btn) {
       btn.disabled = true;
-      btn.textContent = `⏳ Mengacak Kasus untuk ${grp.name}...`;
+      btn.textContent = `⏳ Mengacak Kasus untuk ${turnIdx >= 0 ? `Urutan #${turnIdx + 1} (${grp.name})` : grp.name}...`;
     }
 
-    const cases = DB.getCases();
-    const targetIdx = Math.floor(Math.random() * cases.length);
-    const sliceAngle = (2 * Math.PI) / cases.length;
+    const targetIdx = Math.floor(Math.random() * remainingCases.length);
+    const sliceAngle = (2 * Math.PI) / remainingCases.length;
     const fullSpins = (5 + Math.floor(Math.random() * 5)) * 2 * Math.PI;
     const targetAngle = -(targetIdx * sliceAngle);
     const totalRotation = fullSpins + targetAngle;
@@ -880,25 +1072,42 @@ const Pos2View = {
         lastTickSlice = currentSlice;
         SoundManager.playSFX('tick');
       }
-      this._drawCaseWheel();
+      this._drawCaseWheel(remainingCases);
 
       if (t < 1) {
         requestAnimationFrame(animate);
       } else {
         this._caseAngle = targetAngle;
-        this._drawCaseWheel(targetIdx);
+        this._drawCaseWheel(remainingCases, targetIdx);
         this._spinningCase = false;
 
-        const chosenCase = cases[targetIdx];
+        const chosenCase = remainingCases[targetIdx];
         const user = Auth.getCurrentUser();
         this._previewCaseId = chosenCase.id;
+        this._previewGroupName = grp.name;
+        this._lastSpunGroupId = grp.id;
+        this._manualSelectedGroupId = null;
 
         // Assign case to group & broadcast real-time to students in that group!
         DB.assignCaseToGroup(grp.id, chosenCase.id, user?.name || 'Guru');
 
+        const updatedState = DB.getPos2State();
+        const updatedEffectiveOrder = [
+          ...(updatedState.turnOrder || []),
+          ...groups.map(g => g.id).filter(gid => !(updatedState.turnOrder || []).includes(gid))
+        ];
+        const nextUnassignedId = updatedEffectiveOrder.find(gid => !updatedState.assignments?.[gid]?.caseId);
+        const nextGrp = nextUnassignedId ? DB.getGroupById(nextUnassignedId) : null;
+        const nextTurnIdx = nextGrp ? updatedEffectiveOrder.indexOf(nextGrp.id) : -1;
+
+        this._caseAngle = 0;
         if (typeof SoundManager !== 'undefined') SoundManager.playSFX('reveal');
         App.showConfetti(50);
-        App.showToast(`🎴 Kasus "${chosenCase.title}" berhasil ditetapkan & dikirim ke layar ${grp.name}!`, 'success');
+        if (nextGrp) {
+          App.showToast(`🎴 Urutan #${turnIdx + 1} (${grp.name}) mendapat "${chosenCase.title}"! Keterangan kasus tampil, kasus hilang dari Roda 2 & lanjut ke Urutan #${nextTurnIdx + 1} (${nextGrp.name}).`, 'success');
+        } else {
+          App.showToast(`🎴 Urutan #${turnIdx + 1} (${grp.name}) mendapat "${chosenCase.title}"! Semua kasus pada urutan telah terbagi.`, 'success');
+        }
         this.render();
       }
     };
